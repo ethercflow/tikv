@@ -1,21 +1,29 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::{self, Display, Formatter};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
 use crate::{coprocessor, Result};
-use batch_system::Config as BatchSystemConfig;
+use batch_system::{
+    BatchRouter, Config as BatchSystemConfig, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState,
+    Priority, SCALE_FINISHED_CHANNEL,
+};
 use engine_traits::config as engine_config;
 use engine_traits::PerfLevel;
+use file_system::{set_io_type, IOType};
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
 use prometheus::register_gauge_vec;
 use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
-use tikv_util::{box_err, info, warn};
+use tikv_util::worker::Scheduler;
+use tikv_util::{box_err, error, info, thd_name, warn};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -154,11 +162,11 @@ pub struct Config {
     /// Maximum size of every local read task batch.
     pub local_read_batch_size: u64,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     #[serde(flatten, with = "prefix_apply")]
     pub apply_batch_system: BatchSystemConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     #[serde(flatten, with = "prefix_store")]
     pub store_batch_system: BatchSystemConfig,
 
@@ -725,31 +733,211 @@ impl Config {
     }
 }
 
-pub struct RaftstoreConfigManager(pub Arc<VersionTrack<Config>>);
+pub struct PoolController<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
+    pub router: BatchRouter<N, C>,
+    pub state: PoolState<N, C, H>,
+}
+
+impl<N, C, H> PoolController<N, C, H>
+where
+    N: Fsm,
+    C: Fsm,
+    H: HandlerBuilder<N, C>,
+{
+    pub fn new(router: BatchRouter<N, C>, state: PoolState<N, C, H>) -> Self {
+        PoolController { router, state }
+    }
+}
+
+impl<N, C, H> PoolController<N, C, H>
+where
+    N: Fsm + std::marker::Send + 'static,
+    C: Fsm + std::marker::Send + 'static,
+    H: HandlerBuilder<N, C>,
+{
+    pub fn resize_to(&mut self, size: usize) -> (bool, usize) {
+        let current_pool_size = self.state.pool_size.load(Ordering::Relaxed);
+        if current_pool_size > size {
+            return (true, current_pool_size - size);
+        }
+        (false, size - current_pool_size)
+    }
+
+    pub fn decrease_by(&mut self, size: usize) {
+        let orignal_pool_size = self.state.pool_size.load(Ordering::Relaxed);
+        for _ in 0..size {
+            if let Err(e) = self.state.fsm_sender.send(FsmTypes::Empty) {
+                error!(
+                    "failed to decrese thread pool";
+                    "decrease to" => size,
+                    "err" => %e,
+                );
+                return;
+            }
+        }
+        let s = self
+            .state
+            .expected_pool_size
+            .fetch_sub(size, Ordering::Relaxed);
+        info!(
+            "decrease thread pool";
+            "from" => orignal_pool_size,
+            "decrease to" => s - 1,
+            "pool" => ?self.state.name_prefix
+        );
+    }
+
+    pub fn increase_by(&mut self, size: usize) {
+        let name_prefix = self.state.name_prefix.clone();
+        let mut workers = self.state.workers.lock().unwrap();
+        let id_base = workers.len();
+        for i in 0..size {
+            let handler = self.state.handler_builder.build(Priority::Normal);
+            let pool_size = Arc::clone(&self.state.pool_size);
+            let mut poller = Poller {
+                router: self.router.clone(),
+                fsm_receiver: self.state.fsm_receiver.clone(),
+                handler,
+                max_batch_size: self.state.max_batch_size,
+                reschedule_duration: self.state.reschedule_duration,
+                pool_size: Some(pool_size),
+                expected_pool_size: Some(Arc::clone(&self.state.expected_pool_size)),
+                pool_scale_finished: Some(SCALE_FINISHED_CHANNEL.0.clone()),
+            };
+            let props = tikv_util::thread_group::current_properties();
+            let t = thread::Builder::new()
+                .name(thd_name!(format!(
+                    "{}-{}",
+                    name_prefix,
+                    i + id_base - self.state.low_priority_pool_size
+                )))
+                .spawn(move || {
+                    tikv_util::thread_group::set_properties(props);
+                    set_io_type(IOType::ForegroundWrite);
+                    poller.poll();
+                })
+                .unwrap();
+            workers.push(t);
+        }
+        let _ = self
+            .state
+            .expected_pool_size
+            .fetch_add(size, Ordering::Relaxed);
+        let s = self.state.pool_size.fetch_add(size, Ordering::Relaxed);
+        info!("increase thread pool"; "from" => s, "increase to" => s + size, "pool" => ?self.state.name_prefix);
+        SCALE_FINISHED_CHANNEL.0.send(()).unwrap();
+    }
+}
+
+#[derive(Debug)]
+pub enum RaftstoreConfigTask {
+    ScalePool {
+        apply: Option<usize>,
+        raft: Option<usize>,
+    },
+}
+
+impl Display for RaftstoreConfigTask {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match &self {
+            RaftstoreConfigTask::ScalePool { apply, raft } => {
+                write!(f, "Scale pool ")?;
+                match apply {
+                    Some(apply) => write!(f, "ajusts apply: {} ", apply),
+                    None => write!(f, ""),
+                }
+                .unwrap();
+                match raft {
+                    Some(raft) => write!(f, "ajusts raft: {} ", raft),
+                    None => write!(f, ""),
+                }
+            }
+        }
+    }
+}
+
+pub struct RaftstoreConfigManager {
+    scheduler: Scheduler<RaftstoreConfigTask>,
+    config: Arc<VersionTrack<Config>>,
+}
+
+impl RaftstoreConfigManager {
+    pub fn new(
+        scheduler: Scheduler<RaftstoreConfigTask>,
+        config: Arc<VersionTrack<Config>>,
+    ) -> RaftstoreConfigManager {
+        RaftstoreConfigManager { scheduler, config }
+    }
+}
 
 impl ConfigManager for RaftstoreConfigManager {
     fn dispatch(
         &mut self,
-        change: ConfigChange,
+        mut change: ConfigChange,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let change_str = format!("{:?}", change);
         {
             let change = change.clone();
-            self.0.update(move |cfg: &mut Config| cfg.update(change));
+            self.config
+                .update(move |cfg: &mut Config| cfg.update(change));
         }
+        let mut scale_pool = RaftstoreConfigTask::ScalePool {
+            apply: None,
+            raft: None,
+        };
+        let mut scaling_pool = false;
+        if let Some(ConfigValue::Module(mut apply_batch_system_change)) =
+            change.remove("apply_batch_system").map(Into::into)
+        {
+            if let Some(pool_size) = apply_batch_system_change.remove("pool_size") {
+                let pool_size: usize = pool_size.into();
+                CONFIG_RAFTSTORE_GAUGE
+                    .with_label_values(&["apply_pool_size"])
+                    .set(pool_size as f64);
+                #[allow(irrefutable_let_patterns)]
+                if let RaftstoreConfigTask::ScalePool {
+                    ref mut apply,
+                    raft: _,
+                } = scale_pool
+                {
+                    *apply = Some(pool_size);
+                }
+                scaling_pool = true;
+            }
+        }
+        if let Some(ConfigValue::Module(mut raft_batch_system_change)) =
+            change.remove("store_batch_system").map(Into::into)
+        {
+            if let Some(pool_size) = raft_batch_system_change.remove("pool_size") {
+                let pool_size: usize = pool_size.into();
+                CONFIG_RAFTSTORE_GAUGE
+                    .with_label_values(&["store_pool_size"])
+                    .set(pool_size as f64);
+                #[allow(irrefutable_let_patterns)]
+                if let RaftstoreConfigTask::ScalePool {
+                    apply: _,
+                    ref mut raft,
+                } = scale_pool
+                {
+                    *raft = Some(pool_size);
+                }
+                scaling_pool = true;
+            }
+        }
+        {
+            if scaling_pool {
+                if let Err(e) = self.scheduler.schedule(scale_pool) {
+                    error!("raftstore configuration manager schedule scale pool work task failed"; "err"=> ?e);
+                }
+                SCALE_FINISHED_CHANNEL.1.recv().unwrap();
+            }
+        }
+        Config::write_change_into_metrics(change);
         info!(
             "raftstore config changed";
-            "change" => ?change,
+            "change" => change_str,
         );
-        Config::write_change_into_metrics(change);
         Ok(())
-    }
-}
-
-impl std::ops::Deref for RaftstoreConfigManager {
-    type Target = Arc<VersionTrack<Config>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 

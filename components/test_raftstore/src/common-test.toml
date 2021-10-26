@@ -71,6 +71,9 @@ hibernate-regions = true
 
 [coprocessor]
 
+batch-split-limit = 123
+split-region-on-table = true
+region-split-keys = 12345
 [rocksdb]
 max-background-jobs = 1
 max-sub-compactions = 1
@@ -114,3 +117,8 @@ wake-up-delay-duration = "100ms"
 enable = false
 advance-ts-interval = "10ms"
 scan-lock-pool-size = 1
+[raftstore.apply-batch-system]
+pool-size = 2
+[raftstore.store-batch-system]
+pool-size = 2
+
