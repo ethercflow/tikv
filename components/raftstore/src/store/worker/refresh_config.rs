@@ -63,6 +63,12 @@ where
         }
         info!("resize_apply_pool");
     }
+
+    fn cleanup_poller_threads(&mut self) {
+        self.raft_pool.cleanup_poller_threads();
+        self.apply_pool.cleanup_poller_threads();
+        SCALE_FINISHED_CHANNEL.0.send(()).unwrap();
+    }
 }
 
 impl<EK, ER, AH, RH> Runnable for Runner<EK, ER, AH, RH>
@@ -84,6 +90,9 @@ where
                     self.resize_raft_pool(raft);
                 }
                 info!("run ScalePool");
+            }
+            RaftstoreConfigTask::CleanupPollerThreads => {
+                self.cleanup_poller_threads();
             }
         }
     }

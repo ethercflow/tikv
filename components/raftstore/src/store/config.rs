@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, error, info, thd_name, warn};
+use tikv_util::{box_err, debug, error, info, safe_panic, thd_name, warn};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -803,6 +803,7 @@ where
                 pool_size: Some(pool_size),
                 expected_pool_size: Some(Arc::clone(&self.state.expected_pool_size)),
                 pool_scale_finished: Some(SCALE_FINISHED_CHANNEL.0.clone()),
+                joinable_workers: Some(Arc::clone(&self.state.joinable_workers)),
             };
             let props = tikv_util::thread_group::current_properties();
             let t = thread::Builder::new()
@@ -827,6 +828,25 @@ where
         info!("increase thread pool"; "from" => s, "increase to" => s + size, "pool" => ?self.state.name_prefix);
         SCALE_FINISHED_CHANNEL.0.send(()).unwrap();
     }
+
+    pub fn cleanup_poller_threads(&mut self) {
+        let mut joinable_workers = self.state.joinable_workers.lock().unwrap();
+        let mut workers = self.state.workers.lock().unwrap();
+        let mut last_error = None;
+        for tid in joinable_workers.drain(..) {
+            if let Some(i) = workers.iter().position(|v| v.thread().id() == tid) {
+                let h = workers.swap_remove(i);
+                debug!("cleanup poller waiting for {}", h.thread().name().unwrap());
+                if let Err(e) = h.join() {
+                    error!("failed to join worker thread: {:?}", e);
+                    last_error = Some(e);
+                }
+            }
+        }
+        if let Some(e) = last_error {
+            safe_panic!("failed to join worker thread: {:?}", e);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -835,6 +855,7 @@ pub enum RaftstoreConfigTask {
         apply: Option<usize>,
         raft: Option<usize>,
     },
+    CleanupPollerThreads,
 }
 
 impl Display for RaftstoreConfigTask {
@@ -851,6 +872,9 @@ impl Display for RaftstoreConfigTask {
                     Some(raft) => write!(f, "ajusts raft: {} ", raft),
                     None => write!(f, ""),
                 }
+            }
+            RaftstoreConfigTask::CleanupPollerThreads => {
+                write!(f, "Cleanup poller threads")
             }
         }
     }
@@ -928,6 +952,13 @@ impl ConfigManager for RaftstoreConfigManager {
             if scaling_pool {
                 if let Err(e) = self.scheduler.schedule(scale_pool) {
                     error!("raftstore configuration manager schedule scale pool work task failed"; "err"=> ?e);
+                }
+                SCALE_FINISHED_CHANNEL.1.recv().unwrap();
+                if let Err(e) = self
+                    .scheduler
+                    .schedule(RaftstoreConfigTask::CleanupPollerThreads)
+                {
+                    error!("raftstore configuration manager schedule cleanup poller threads work task failed"; "err"=> ?e);
                 }
                 SCALE_FINISHED_CHANNEL.1.recv().unwrap();
             }

@@ -17,7 +17,7 @@ use lazy_static::lazy_static;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread::{self, current, JoinHandle, ThreadId};
 use std::time::Duration;
 use tikv_util::mpsc;
 use tikv_util::time::Instant;
@@ -263,6 +263,7 @@ pub struct Poller<N: Fsm, C: Fsm, Handler> {
     pub pool_size: Option<Arc<AtomicUsize>>,
     pub expected_pool_size: Option<Arc<AtomicUsize>>,
     pub pool_scale_finished: Option<channel::Sender<()>>,
+    pub joinable_workers: Option<Arc<Mutex<Vec<ThreadId>>>>,
 }
 
 impl<N, C, Handler> Drop for Poller<N, C, Handler>
@@ -271,6 +272,9 @@ where
     C: Fsm,
 {
     fn drop(&mut self) {
+        if let Some(joinable_workers) = &self.joinable_workers {
+            joinable_workers.lock().unwrap().push(current().id());
+        }
         if let Some(pool_size) = &self.pool_size {
             if pool_size.fetch_sub(1, Ordering::AcqRel) - 1
                 == self
@@ -419,6 +423,7 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     low_priority_pool_size: usize,
     alive_workers: Arc<AtomicUsize>,
     expected_workers: Arc<AtomicUsize>,
+    joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
     pool_state_builder: Option<PoolStateBuilder<N, C>>,
 }
 
@@ -445,6 +450,7 @@ where
             self.low_priority_pool_size,
             self.expected_workers.clone(),
             self.workers.clone(),
+            self.joinable_workers.clone(),
             handler_builder,
         ))
     }
@@ -477,6 +483,11 @@ where
             },
             pool_scale_finished: if priority == Priority::Normal {
                 Some(SCALE_FINISHED_CHANNEL.0.clone())
+            } else {
+                None
+            },
+            joinable_workers: if priority == Priority::Normal {
+                Some(Arc::clone(&self.joinable_workers))
             } else {
                 None
             },
@@ -557,17 +568,19 @@ impl<N, C> PoolStateBuilder<N, C> {
         low_priority_pool_size: usize,
         expected_pool_size: Arc<AtomicUsize>,
         workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+        joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
         handler_builder: H,
     ) -> PoolState<N, C, H> {
         PoolState {
             name_prefix,
             handler_builder,
-            workers,
+            fsm_receiver: self.fsm_receiver,
+            fsm_sender: self.fsm_sender,
             pool_size,
             low_priority_pool_size,
             expected_pool_size,
-            fsm_receiver: self.fsm_receiver,
-            fsm_sender: self.fsm_sender,
+            workers,
+            joinable_workers,
             max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
         }
@@ -583,6 +596,7 @@ pub struct PoolState<N, C, H: HandlerBuilder<N, C>> {
     pub low_priority_pool_size: usize,
     pub expected_pool_size: Arc<AtomicUsize>,
     pub workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    pub joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
 }
@@ -628,6 +642,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         low_priority_pool_size: cfg.low_priority_pool_size,
         alive_workers: Arc::new(AtomicUsize::new(0)),
         expected_workers: Arc::new(AtomicUsize::new(cfg.pool_size)),
+        joinable_workers: Arc::new(Mutex::new(Vec::new())),
         pool_state_builder: Some(pool_state_builder),
     };
     (router, system)
