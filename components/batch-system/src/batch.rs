@@ -452,6 +452,7 @@ where
             self.workers.clone(),
             self.joinable_workers.clone(),
             handler_builder,
+            self.pool_size,
         ))
     }
 
@@ -570,6 +571,7 @@ impl<N, C> PoolStateBuilder<N, C> {
         workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
         joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
         handler_builder: H,
+        id_base: usize,
     ) -> PoolState<N, C, H> {
         PoolState {
             name_prefix,
@@ -583,6 +585,7 @@ impl<N, C> PoolStateBuilder<N, C> {
             joinable_workers,
             max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
+            id_base,
         }
     }
 }
@@ -599,6 +602,7 @@ pub struct PoolState<N, C, H: HandlerBuilder<N, C>> {
     pub joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
+    pub id_base: usize,
 }
 
 pub type BatchRouter<N, C> = Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>;

@@ -765,6 +765,10 @@ where
 
     pub fn decrease_by(&mut self, size: usize) {
         let orignal_pool_size = self.state.pool_size.load(Ordering::Relaxed);
+        let s = self
+            .state
+            .expected_pool_size
+            .fetch_sub(size, Ordering::Relaxed);
         for _ in 0..size {
             if let Err(e) = self.state.fsm_sender.send(FsmTypes::Empty) {
                 error!(
@@ -775,10 +779,6 @@ where
                 return;
             }
         }
-        let s = self
-            .state
-            .expected_pool_size
-            .fetch_sub(size, Ordering::Relaxed);
         info!(
             "decrease thread pool";
             "from" => orignal_pool_size,
@@ -790,7 +790,6 @@ where
     pub fn increase_by(&mut self, size: usize) {
         let name_prefix = self.state.name_prefix.clone();
         let mut workers = self.state.workers.lock().unwrap();
-        let id_base = workers.len();
         for i in 0..size {
             let handler = self.state.handler_builder.build(Priority::Normal);
             let pool_size = Arc::clone(&self.state.pool_size);
@@ -810,7 +809,7 @@ where
                 .name(thd_name!(format!(
                     "{}-{}",
                     name_prefix,
-                    i + id_base - self.state.low_priority_pool_size
+                    i + self.state.id_base - self.state.low_priority_pool_size
                 )))
                 .spawn(move || {
                     tikv_util::thread_group::set_properties(props);
