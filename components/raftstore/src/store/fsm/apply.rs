@@ -3851,6 +3851,28 @@ where
     }
 }
 
+impl<EK, W> Clone for Builder<EK, W>
+where
+    EK: KvEngine,
+    W: WriteBatch<EK>,
+{
+    fn clone(&self) -> Self {
+        Builder {
+            tag: self.tag.clone(),
+            cfg: self.cfg.clone(),
+            coprocessor_host: self.coprocessor_host.clone(),
+            importer: self.importer.clone(),
+            region_scheduler: self.region_scheduler.clone(),
+            engine: self.engine.clone(),
+            sender: self.sender.clone_box(),
+            router: self.router.clone(),
+            _phantom: self._phantom,
+            store_id: self.store_id,
+            pending_create_peers: self.pending_create_peers.clone(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ApplyRouter<EK>
 where

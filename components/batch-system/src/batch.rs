@@ -11,6 +11,7 @@ use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
 use crossbeam::channel::{self, Receiver, SendError, Sender};
+use fail::fail_point;
 use file_system::{set_io_type, IOType};
 use lazy_static::lazy_static;
 use std::borrow::Cow;
@@ -282,7 +283,7 @@ where
                     .unwrap()
                     .load(Ordering::Relaxed)
             {
-                // self.pool_scale_finished.take().unwrap().send(()).unwrap();
+                self.pool_scale_finished.take().unwrap().send(()).unwrap();
                 info!("Decrease pool done");
             }
         }
@@ -316,6 +317,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
     pub fn poll(&mut self) {
+        fail_point!("poll");
         let mut batch = Batch::with_capacity(self.max_batch_size);
         let mut reschedule_fsms = Vec::with_capacity(self.max_batch_size);
 
