@@ -3665,7 +3665,7 @@ where
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatch<EK>,
+    W: WriteBatch<EK> + 'static,
 {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -3823,7 +3823,7 @@ where
 impl<EK, W> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatch<EK>,
+    W: WriteBatch<EK> + 'static,
 {
     type Handler = ApplyPoller<EK, W>;
 
