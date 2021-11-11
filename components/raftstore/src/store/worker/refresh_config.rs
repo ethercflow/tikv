@@ -113,6 +113,7 @@ where
         let mut joinable_workers = self.state.joinable_workers.lock().unwrap();
         let mut workers = self.state.workers.lock().unwrap();
         let mut last_error = None;
+        let mut j = 0;
         for tid in joinable_workers.drain(..) {
             if let Some(i) = workers.iter().position(|v| v.thread().id() == tid) {
                 let h = workers.swap_remove(i);
@@ -121,11 +122,15 @@ where
                     error!("failed to join worker thread: {:?}", e);
                     last_error = Some(e);
                 }
+                j += 1;
+            } else {
+                unreachable!()
             }
         }
         if let Some(e) = last_error {
             safe_panic!("failed to join worker thread: {:?}", e);
         }
+        info!("cleanup {} pollers", j);
     }
 }
 
@@ -214,7 +219,6 @@ where
     }
 
     fn cleanup_poller_threads(&mut self, type_: &str) {
-        println!("*** type_: {}", type_);
         match type_ {
             "apply" => self.apply_pool.cleanup_poller_threads(),
             "raft" => self.raft_pool.cleanup_poller_threads(),
