@@ -3011,6 +3011,29 @@ lazy_static! {
     pub static ref TIKVCONFIG_TYPED: ConfigChange = TiKvConfig::default().typed();
 }
 
+fn serde_to_online_config(mut name: String) -> String {
+    name = match name.as_ref() {
+        "raftstore.store-pool-size" => name.replace(
+            "raftstore.store-pool-size",
+            "raftstore.store_batch_system.pool_size",
+        ),
+        "raftstore.apply-pool-size" => name.replace(
+            "raftstore.apply-pool-size",
+            "raftstore.apply_batch_system.pool_size",
+        ),
+        "raftstore.store_pool_size" => name.replace(
+            "raftstore.store_pool_size",
+            "raftstore.store_batch_system.pool_size",
+        ),
+        "raftstore.apply_pool_size" => name.replace(
+            "raftstore.apply_pool_size",
+            "raftstore.apply_batch_system.pool_size",
+        ),
+        _ => name,
+    };
+    name
+}
+
 fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> {
     fn helper(
         mut fields: Vec<String>,
@@ -3056,7 +3079,8 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
         Ok(())
     }
     let mut res = HashMap::new();
-    for (name, value) in change {
+    for (mut name, value) in change {
+        name = serde_to_online_config(name);
         let fields: Vec<_> = name
             .as_str()
             .split('.')
@@ -3123,7 +3147,8 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
         }
     }
     let mut dst = HashMap::new();
-    for (name, value) in change {
+    for (mut name, value) in change {
+        name = serde_to_online_config(name);
         let fields: Vec<_> = name
             .as_str()
             .split('.')

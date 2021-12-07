@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
+use super::worker::{RaftStoreThreadPool, RefreshConfigTask};
 use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
 use engine_traits::perf_level_serde;
@@ -15,7 +16,8 @@ use prometheus::register_gauge_vec;
 use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
-use tikv_util::{box_err, info, warn};
+use tikv_util::worker::Scheduler;
+use tikv_util::{box_err, error, info, warn};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -161,11 +163,11 @@ pub struct Config {
     /// Maximum size of every local read task batch.
     pub local_read_batch_size: u64,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     #[serde(flatten, with = "prefix_apply")]
     pub apply_batch_system: BatchSystemConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     #[serde(flatten, with = "prefix_store")]
     pub store_batch_system: BatchSystemConfig,
 
@@ -740,31 +742,61 @@ impl Config {
     }
 }
 
-pub struct RaftstoreConfigManager(pub Arc<VersionTrack<Config>>);
+pub struct RaftstoreConfigManager {
+    scheduler: Scheduler<RefreshConfigTask>,
+    config: Arc<VersionTrack<Config>>,
+}
+
+impl RaftstoreConfigManager {
+    pub fn new(
+        scheduler: Scheduler<RefreshConfigTask>,
+        config: Arc<VersionTrack<Config>>,
+    ) -> RaftstoreConfigManager {
+        RaftstoreConfigManager { scheduler, config }
+    }
+}
 
 impl ConfigManager for RaftstoreConfigManager {
     fn dispatch(
         &mut self,
-        change: ConfigChange,
+        mut change: ConfigChange,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let change_str = format!("{:?}", change);
         {
             let change = change.clone();
-            self.0.update(move |cfg: &mut Config| cfg.update(change));
+            self.config
+                .update(move |cfg: &mut Config| cfg.update(change));
+        }
+        Config::write_change_into_metrics(change.clone());
+        if let Some(ConfigValue::Module(mut raft_batch_system_change)) =
+            change.remove("store_batch_system").map(Into::into)
+        {
+            if let Some(pool_size) = raft_batch_system_change.remove("pool_size") {
+                let scale_pool =
+                    RefreshConfigTask::ScalePool(RaftStoreThreadPool::Store, pool_size.into());
+                if let Err(e) = self.scheduler.schedule(scale_pool) {
+                    error!("raftstore configuration manager schedule scale raft pool work task failed"; "err"=> ?e);
+                }
+                info!("recv RefreshConfigTask::ScalePool finished");
+            }
+        }
+        if let Some(ConfigValue::Module(mut apply_batch_system_change)) =
+            change.remove("apply_batch_system").map(Into::into)
+        {
+            if let Some(pool_size) = apply_batch_system_change.remove("pool_size") {
+                let scale_pool =
+                    RefreshConfigTask::ScalePool(RaftStoreThreadPool::Apply, pool_size.into());
+                if let Err(e) = self.scheduler.schedule(scale_pool) {
+                    error!("raftstore configuration manager schedule scale apply pool work task failed"; "err"=> ?e);
+                }
+                info!("recv RefreshConfigTask::ScalePool finished");
+            }
         }
         info!(
             "raftstore config changed";
-            "change" => ?change,
+            "change" => ?change_str,
         );
-        Config::write_change_into_metrics(change);
         Ok(())
-    }
-}
-
-impl std::ops::Deref for RaftstoreConfigManager {
-    type Target = Arc<VersionTrack<Config>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 
