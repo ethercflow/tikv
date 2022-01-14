@@ -70,6 +70,15 @@ fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
 }
 
 #[allow(dead_code)]
+pub fn initial_early_logger() {
+    let log = logger::term_writer();
+    let drainer = logger::text_format(log, true);
+    logger::init_log(drainer, slog::Level::Info, false, true, vec![], 0).unwrap_or_else(|e| {
+        fatal!("failed to initialize early log: {}", e);
+    });
+}
+
+#[allow(dead_code)]
 pub fn initial_logger(config: &TiKvConfig) {
     let rocksdb_info_log_path = if !config.rocksdb.info_log_dir.is_empty() {
         make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)

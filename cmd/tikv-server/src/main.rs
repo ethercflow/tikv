@@ -6,7 +6,9 @@ use std::path::Path;
 use std::process;
 
 use clap::{crate_authors, App, Arg};
-use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
+use server::setup::{
+    ensure_no_unrecognized_config, initial_early_logger, validate_and_persist_config,
+};
 use tikv::config::TiKvConfig;
 
 fn main() {
@@ -178,6 +180,7 @@ fn main() {
         });
 
     server::setup::overwrite_config_with_cmd_args(&mut config, &matches);
+    initial_early_logger();
     config.logger_compatible_adjust();
 
     if is_config_check {
