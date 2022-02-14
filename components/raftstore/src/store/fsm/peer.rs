@@ -969,6 +969,9 @@ where
             "region_id" => self.region_id(),
         );
         self.fsm.tick_registry[tick as usize] = false;
+        self.fsm
+            .peer
+            .adjust_raft_max_inflight_msgs_if_cfg_changed(self.ctx);
         match tick {
             PeerTick::Raft => self.on_raft_base_tick(),
             PeerTick::RaftLogGc => self.on_raft_gc_log_tick(false),

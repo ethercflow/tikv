@@ -467,7 +467,9 @@ where
 
     /// The Raft state machine of this Peer.
     pub raft_group: RawNode<PeerStorage<EK, ER>>,
-    /// The cache of meta information for Region's other Peers.
+    // The online configurable Raft configurations
+    raft_max_inflight_msgs: usize,
+    //// The cache of meta information for Region's other Peers.
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
@@ -651,6 +653,7 @@ where
             peer,
             region_id: region.get_id(),
             raft_group,
+            raft_max_inflight_msgs: cfg.raft_max_inflight_msgs,
             proposals: ProposalQueue::new(tag.clone()),
             pending_reads: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
@@ -4535,6 +4538,18 @@ where
                 .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
         });
         !has_overlapped_reads && !has_overlapped_writes
+    }
+
+    pub fn adjust_raft_max_inflight_msgs_if_cfg_changed<T>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T>,
+    ) {
+        if ctx.cfg.raft_max_inflight_msgs != self.raft_max_inflight_msgs {
+            self.raft_group
+                .raft
+                .adjust_max_inflight_msgs(self.peer_id(), ctx.cfg.raft_max_inflight_msgs);
+            self.raft_max_inflight_msgs = ctx.cfg.raft_max_inflight_msgs;
+        }
     }
 }
 
