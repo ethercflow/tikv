@@ -1,11 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::store::fsm::apply::{ApplyFsm, ControlFsm};
 use crate::store::fsm::store::StoreFsm;
-use crate::store::fsm::PeerFsm;
+use crate::store::fsm::{PeerFsm, StoreMeta};
+use crate::store::{CasualMessage, PeerMsg};
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
 use file_system::{set_io_type, IOType};
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use tikv_util::worker::Runnable;
 use tikv_util::{debug, error, info, safe_panic, thd_name};
@@ -112,6 +113,7 @@ pub enum ThreadPool {
 #[derive(Debug)]
 pub enum Task {
     ScalePool(ThreadPool, usize),
+    AdjustMaxInflightMsgs(usize),
 }
 
 impl Display for Task {
@@ -124,6 +126,7 @@ impl Display for Task {
                     ThreadPool::Apply => write!(f, "ajusts raft: {} ", size),
                 }
             }
+            Task::AdjustMaxInflightMsgs(cap) => write!(f, "adjusts max inflight msgs to: {}", cap),
         }
     }
 }
@@ -137,6 +140,7 @@ where
 {
     apply_pool: PoolController<ApplyFsm<EK>, ControlFsm, AH>,
     raft_pool: PoolController<PeerFsm<EK, ER>, StoreFsm<EK>, RH>,
+    store_meta: Arc<Mutex<StoreMeta>>,
 }
 
 impl<EK, ER, AH, RH> Runner<EK, ER, AH, RH>
@@ -151,6 +155,7 @@ where
         raft_router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
         apply_pool_state: PoolState<ApplyFsm<EK>, ControlFsm, AH>,
         raft_pool_state: PoolState<PeerFsm<EK, ER>, StoreFsm<EK>, RH>,
+        store_meta: Arc<Mutex<StoreMeta>>,
     ) -> Self {
         let apply_pool = PoolController::new(apply_router, apply_pool_state);
         let raft_pool = PoolController::new(raft_router, raft_pool_state);
@@ -158,6 +163,7 @@ where
         Runner {
             apply_pool,
             raft_pool,
+            store_meta,
         }
     }
 
@@ -192,6 +198,24 @@ where
             "to" => self.apply_pool.state.expected_pool_size
         );
     }
+
+    fn adjust_max_inflight_msgs(&mut self, cap: usize) {
+        let meta = self.store_meta.lock().unwrap();
+        for region_id in meta.regions.keys() {
+            match self.raft_pool.router.send(
+                *region_id,
+                PeerMsg::CasualMessage(CasualMessage::AccessPeer(Box::new(move |peer| {
+                    peer.adjust_max_inflight_msgs(cap);
+                }))),
+            ) {
+                Ok(_) => (),
+                Err(err) => error!(
+                    "failed to adjust region: {}'s max inflight msgs, err: {}",
+                    region_id, err
+                ),
+            }
+        }
+    }
 }
 
 impl<EK, ER, AH, RH> Runnable for Runner<EK, ER, AH, RH>
@@ -209,6 +233,7 @@ where
                 ThreadPool::Store => self.resize_raft_pool(size),
                 ThreadPool::Apply => self.resize_apply_pool(size),
             },
+            Task::AdjustMaxInflightMsgs(cap) => self.adjust_max_inflight_msgs(cap),
         }
     }
 }

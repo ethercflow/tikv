@@ -1513,11 +1513,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
 
+        let store_meta = raft_builder.store_meta.clone();
         let refresh_config_runner = RefreshConfigRunner::new(
             self.apply_router.router.clone(),
             self.router.router.clone(),
             self.apply_system.build_pool_state(apply_builder),
             self.system.build_pool_state(raft_builder),
+            store_meta,
         );
         assert!(workers.refresh_config_worker.start(refresh_config_runner));
 

@@ -4743,6 +4743,7 @@ pub trait AbstractPeer {
     fn raft_status(&self) -> raft::Status<'_>;
     fn raft_commit_index(&self) -> u64;
     fn pending_merge_state(&self) -> Option<&MergeState>;
+    fn adjust_max_inflight_msgs(&mut self, cap: usize);
 }
 
 mod memtrace {

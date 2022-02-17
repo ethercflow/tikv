@@ -2761,6 +2761,12 @@ where
                     if self.fsm.peer.is_leader() {
                         need_ping = true;
                         self.fsm.peer.peers_start_pending_time.push((peer_id, now));
+                        // As `raft_max_inflight_msgs` may have been updated via online config
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .raft
+                            .adjust_max_inflight_msgs(peer_id, self.ctx.cfg.raft_max_inflight_msgs);
                     }
                 }
                 ConfChangeType::RemoveNode => {
@@ -5026,6 +5032,17 @@ impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for PeerFsm<EK, ER> {
     }
     fn pending_merge_state(&self) -> Option<&MergeState> {
         self.peer.pending_merge_state.as_ref()
+    }
+    fn adjust_max_inflight_msgs(&mut self, cap: usize) {
+        if self.peer.is_leader() {
+            let peers: Vec<_> = self.region().get_peers().into();
+            for p in peers {
+                let id = p.get_id();
+                if id != self.peer_id() {
+                    self.peer.raft_group.raft.adjust_max_inflight_msgs(id, cap);
+                }
+            }
+        }
     }
 }
 
