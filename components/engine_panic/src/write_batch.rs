@@ -6,8 +6,13 @@ use crate::engine::PanicEngine;
 
 impl WriteBatchExt for PanicEngine {
     type WriteBatch = PanicWriteBatch;
+    type WriteBatchVec = PanicWriteBatch;
 
     const WRITE_BATCH_MAX_KEYS: usize = 1;
+
+    fn support_write_batch_vec(&self) -> bool {
+        panic!()
+    }
 
     fn write_batch(&self) -> Self::WriteBatch {
         panic!()
@@ -19,7 +24,11 @@ impl WriteBatchExt for PanicEngine {
 
 pub struct PanicWriteBatch;
 
-impl WriteBatch for PanicWriteBatch {
+impl WriteBatch<PanicEngine> for PanicWriteBatch {
+    fn with_capacity(_: &PanicEngine, _: usize) -> Self {
+        panic!()
+    }
+
     fn write_opt(&self, _: &WriteOptions) -> Result<()> {
         panic!()
     }

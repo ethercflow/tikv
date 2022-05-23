@@ -179,7 +179,7 @@ impl RaftEngine for RocksEngine {
     type LogBatch = RocksWriteBatch;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
-        RocksWriteBatch::with_capacity(self, capacity)
+        RocksWriteBatch::with_capacity(self.as_inner().clone(), capacity)
     }
 
     fn sync(&self) -> Result<()> {
@@ -244,7 +244,7 @@ impl RaftEngine for RocksEngine {
     }
 
     fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
-        let mut wb = self.write_batch();
+        let mut wb = RocksWriteBatch::new(self.as_inner().clone());
         let buf = Vec::with_capacity(1024);
         wb.append_impl(raft_group_id, &entries, buf)?;
         self.consume(&mut wb, false)
@@ -334,7 +334,7 @@ impl RaftLogBatch for RocksWriteBatch {
     }
 
     fn merge(&mut self, src: Self) -> Result<()> {
-        WriteBatch::merge(self, src)
+        WriteBatch::<RocksEngine>::merge(self, src)
     }
 }
 
