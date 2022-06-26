@@ -128,8 +128,11 @@ pub struct TitanCfConfig {
     pub max_gc_batch_size: ReadableSize,
     #[online_config(skip)]
     pub discardable_ratio: f64,
+    // deprecated.
     #[online_config(skip)]
-    pub sample_ratio: f64,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub sample_ratio: Option<f64>,
     #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
     pub blob_run_mode: BlobRunMode,
@@ -155,7 +158,7 @@ impl Default for TitanCfConfig {
             min_gc_batch_size: ReadableSize::mb(16),
             max_gc_batch_size: ReadableSize::mb(64),
             discardable_ratio: 0.5,
-            sample_ratio: 0.1,
+            sample_ratio: None,
             merge_small_file_threshold: ReadableSize::mb(8),
             blob_run_mode: BlobRunMode::Normal,
             level_merge: false,
@@ -175,7 +178,6 @@ impl TitanCfConfig {
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0 as u64);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0 as u64);
         opts.set_discardable_ratio(self.discardable_ratio);
-        opts.set_sample_ratio(self.sample_ratio);
         opts.set_merge_small_file_threshold(self.merge_small_file_threshold.0 as u64);
         opts.set_blob_run_mode(self.blob_run_mode.into());
         opts.set_level_merge(self.level_merge);
@@ -476,9 +478,6 @@ macro_rules! write_into_metrics {
         $metrics
             .with_label_values(&[$tag, "titan_discardable_ratio"])
             .set($cf.titan.discardable_ratio);
-        $metrics
-            .with_label_values(&[$tag, "titan_sample_ratio"])
-            .set($cf.titan.sample_ratio);
         $metrics
             .with_label_values(&[$tag, "titan_merge_small_file_threshold"])
             .set($cf.titan.merge_small_file_threshold.0 as f64);
@@ -1140,8 +1139,8 @@ impl DbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
-        let enable_pipelined_commit = !self.enable_pipelined_write && !self.enable_unordered_write;
-        opts.enable_pipelined_commit(enable_pipelined_commit);
+        let enable_multi_batch_write = !self.enable_pipelined_write && !self.enable_unordered_write;
+        opts.enable_multi_batch_write(enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.set_info_log(RocksdbLogger::default());
         opts.set_info_log_level(self.info_log_level.into());
