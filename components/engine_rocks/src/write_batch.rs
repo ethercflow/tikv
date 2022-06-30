@@ -7,8 +7,8 @@ use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 use crate::{engine::RocksEngine, options::RocksWriteOptions, util::get_cf_handle};
 
-const WRITE_BATCH_MAX_BATCH: usize = 16;
-const WRITE_BATCH_LIMIT: usize = 16;
+pub const WRITE_BATCH_MAX_BATCH: usize = 16;
+pub const WRITE_BATCH_LIMIT: usize = 16;
 
 impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatchVec;
@@ -133,6 +133,11 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
             self.wbs[i].clear();
         }
         self.save_points.clear();
+        // Avoid making the wbs too big at one time, then the memory will be kept
+        // after reusing
+        if self.index > WRITE_BATCH_MAX_BATCH + 1 {
+            self.wbs.shrink_to(WRITE_BATCH_MAX_BATCH + 1);
+        }
         self.index = 0;
     }
 
