@@ -7,8 +7,8 @@ use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 use crate::{engine::RocksEngine, options::RocksWriteOptions, util::get_cf_handle};
 
-pub const WRITE_BATCH_MAX_BATCH: usize = 16;
-pub const WRITE_BATCH_LIMIT: usize = 16;
+const WRITE_BATCH_MAX_BATCH: usize = 16;
+const WRITE_BATCH_LIMIT: usize = 16;
 
 impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatchVec;
@@ -98,12 +98,10 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
         let opt: RocksWriteOptions = opts.into();
         if self.index > 0 {
-            eprintln!("self.index > 0");
             self.get_db()
                 .multi_batch_write(self.as_inner(), &opt.into_raw())
                 .map_err(Error::Engine)
         } else {
-            eprintln!("self.index = 0");
             self.get_db()
                 .write_opt(&self.wbs[0], &opt.into_raw())
                 .map_err(Error::Engine)
@@ -207,7 +205,6 @@ impl Mutable for RocksWriteBatchVec {
     }
 
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        eprintln!("before delete range");
         self.check_switch_batch();
         self.wbs[self.index]
             .delete_range(begin_key, end_key)

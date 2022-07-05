@@ -1,12 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_test::kv::{KvTestEngine, KV_TEST_WRITE_BATCH_LIMIT, KV_TEST_WRITE_BATCH_MAX_BATCH};
+use engine_test::kv::KvTestEngine;
 use engine_traits::{Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt};
 use panic_hook::recover_safe;
 
 use super::{assert_engine_error, default_engine, multi_batch_write_engine};
 
-/*
 #[test]
 fn write_batch_none_no_commit() {
     let db = default_engine();
@@ -705,61 +704,53 @@ fn write_batch_delete_range_empty_range() {
     for i in 0..256_usize {
         assert!(db.engine.get_value(&i.to_be_bytes()).unwrap().is_some());
     }
-}*/
+}
 
 #[test]
 fn write_batch_delete_range_backward_range() {
-    /*
-        let db = default_engine();
-
-        db.engine.put(b"a", b"").unwrap();
-        db.engine.put(b"b", b"").unwrap();
-        db.engine.put(b"c", b"").unwrap();
-
-        let mut wb = db.engine.write_batch();
-
-        wb.delete_range(b"c", b"a").unwrap();
-        assert!(
-            recover_safe(|| {
-                wb.write().unwrap();
-            })
-            .is_err()
-        );
-
-        assert!(db.engine.get_value(b"a").unwrap().is_some());
-        assert!(db.engine.get_value(b"b").unwrap().is_some());
-        assert!(db.engine.get_value(b"c").unwrap().is_some());
-    */
-    let db = multi_batch_write_engine();
+    let db = default_engine();
 
     db.engine.put(b"a", b"").unwrap();
     db.engine.put(b"b", b"").unwrap();
     db.engine.put(b"c", b"").unwrap();
-    /*
-    for i in 0..256_usize {
-        let x = i.to_be_bytes();
-        db.engine.put(&x, &x).unwrap();
-    }
-     */
 
-    // let mut wb = db.engine.write_batch_with_cap(1024);
     let mut wb = db.engine.write_batch();
 
     wb.delete_range(b"c", b"a").unwrap();
-    /*
-    wb.delete_range(&256_usize.to_be_bytes(), &0_usize.to_be_bytes())
-        .unwrap();
-    */
-    eprintln!("here#1?");
-    let _a = wb.write();
-    eprintln!("here#2?");
     assert!(
         recover_safe(|| {
             wb.write().unwrap();
         })
         .is_err()
     );
-    eprintln!("here#3?");
+
+    assert!(db.engine.get_value(b"a").unwrap().is_some());
+    assert!(db.engine.get_value(b"b").unwrap().is_some());
+    assert!(db.engine.get_value(b"c").unwrap().is_some());
+
+    let db = multi_batch_write_engine();
+
+    db.engine.put(b"a", b"").unwrap();
+    db.engine.put(b"b", b"").unwrap();
+    db.engine.put(b"c", b"").unwrap();
+
+    for i in 0..256_usize {
+        let x = i.to_be_bytes();
+        db.engine.put(&x, &x).unwrap();
+    }
+
+    let mut wb = db.engine.write_batch_with_cap(1024);
+
+    wb.delete_range(b"c", b"a").unwrap();
+    wb.delete_range(&256_usize.to_be_bytes(), &0_usize.to_be_bytes())
+        .unwrap();
+
+    assert!(
+        recover_safe(|| {
+            wb.write().unwrap();
+        })
+        .is_err()
+    );
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());
@@ -769,7 +760,6 @@ fn write_batch_delete_range_backward_range() {
     }
 }
 
-/*
 #[test]
 #[ignore] // see comment in test
 fn write_batch_delete_range_backward_range_partial_commit() {
@@ -817,12 +807,12 @@ fn write_batch_delete_range_backward_range_partial_commit() {
     db.engine.put(b"b", b"").unwrap();
     db.engine.put(b"c", b"").unwrap();
     db.engine.put(b"d", b"").unwrap();
+    for i in 0..256_usize {
+        let x = i.to_be_bytes();
+        db.engine.put(&x, &x).unwrap();
+    }
 
     let mut wb = db.engine.write_batch_with_cap(1024);
-    for i in 0..KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT {
-        let x = i.to_be_bytes();
-        wb.put(&x, &x).unwrap();
-    }
 
     // Everything in the write batch before the panic
     // due to bad range is going to end up committed.
@@ -838,6 +828,12 @@ fn write_batch_delete_range_backward_range_partial_commit() {
     wb.delete_range(b"c", b"a").unwrap();
     wb.put(b"f", b"").unwrap();
     wb.delete(b"a").unwrap();
+    wb.delete_range(&128_usize.to_be_bytes(), &64_usize.to_be_bytes())
+        .unwrap();
+    wb.put(&256_usize.to_be_bytes(), b"").unwrap();
+    for i in 0..64_usize {
+        wb.delete(&i.to_be_bytes()).unwrap();
+    }
 
     assert!(
         recover_safe(|| {
@@ -865,11 +861,11 @@ fn write_batch_is_empty() {
     wb.write().unwrap();
     assert!(!wb.is_empty());
 
-    let db = default_engine();
+    let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
 
     assert!(wb.is_empty());
-    for i in 0..KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT {
+    for i in 0..256_usize {
         let x = i.to_be_bytes();
         wb.put(&x, &x).unwrap();
     }
@@ -889,22 +885,16 @@ fn write_batch_count() {
     wb.write().unwrap();
     assert_eq!(wb.count(), 1);
 
-    let db = default_engine();
+    let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
     assert_eq!(wb.count(), 0);
-    for i in 0..KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT {
+    for i in 0..256_usize {
         let x = i.to_be_bytes();
         wb.put(&x, &x).unwrap();
     }
-    assert_eq!(
-        wb.count(),
-        KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT
-    );
+    assert_eq!(wb.count(), 256);
     wb.write().unwrap();
-    assert_eq!(
-        wb.count(),
-        KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT
-    );
+    assert_eq!(wb.count(), 256);
 }
 
 #[test]
@@ -922,30 +912,22 @@ fn write_batch_count_2() {
     wb.write().unwrap();
     assert_eq!(wb.count(), 3);
 
-    let db = default_engine();
+    let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
 
     assert_eq!(wb.count(), 0);
-    for i in 0..KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT {
+    for i in 0..256_usize {
         let x = i.to_be_bytes();
         wb.put(&x, &x).unwrap();
     }
     wb.put(b"a", b"").unwrap();
-    assert_eq!(
-        wb.count(),
-        1 + KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT
-    );
+    assert_eq!(wb.count(), 257);
     wb.delete(b"a").unwrap();
-    assert_eq!(
-        wb.count(),
-        2 + KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT
-    );
+    assert_eq!(wb.count(), 258);
     wb.delete_range(b"a", b"b").unwrap();
-    assert_eq!(
-        wb.count(),
-        3 + KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT
-    );
+    assert_eq!(wb.count(), 259);
     wb.write().unwrap();
+    assert_eq!(wb.count(), 259);
 }
 
 #[test]
@@ -961,10 +943,10 @@ fn write_batch_clear() {
     wb.write().unwrap();
     assert!(db.engine.get_value(b"a").unwrap().is_none());
 
-    let db = default_engine();
+    let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
 
-    for i in 0..KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT {
+    for i in 0..256_usize {
         let x = i.to_be_bytes();
         wb.put(&x, &x).unwrap();
     }
@@ -972,7 +954,9 @@ fn write_batch_clear() {
     assert!(wb.is_empty());
     assert_eq!(wb.count(), 0);
     wb.write().unwrap();
-    assert!(db.engine.get_value(b"a").unwrap().is_none());
+    for i in 0..256_usize {
+        assert!(db.engine.get_value(&i.to_be_bytes()).unwrap().is_none());
+    }
 }
 
 #[test]
@@ -989,10 +973,9 @@ fn cap_zero() {
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"f").unwrap().is_some());
 
-    let db = default_engine();
+    let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(0);
-
-    for i in 0..KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT {
+    for i in 0..256_usize {
         let x = i.to_be_bytes();
         wb.put(&x, &x).unwrap();
     }
@@ -1003,6 +986,24 @@ fn cap_zero() {
     wb.put(b"e", b"").unwrap();
     wb.put(b"f", b"").unwrap();
     wb.write().unwrap();
+    assert!(
+        db.engine
+            .get_value(&0_usize.to_be_bytes())
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        db.engine
+            .get_value(&123_usize.to_be_bytes())
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        db.engine
+            .get_value(&255_usize.to_be_bytes())
+            .unwrap()
+            .is_some()
+    );
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"f").unwrap().is_some());
 }
@@ -1022,10 +1023,10 @@ fn cap_two() {
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"f").unwrap().is_some());
 
-    let db = default_engine();
+    let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(2);
 
-    for i in 0..KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT {
+    for i in 0..256_usize {
         let x = i.to_be_bytes();
         wb.put(&x, &x).unwrap();
     }
@@ -1036,6 +1037,24 @@ fn cap_two() {
     wb.put(b"e", b"").unwrap();
     wb.put(b"f", b"").unwrap();
     wb.write().unwrap();
+    assert!(
+        db.engine
+            .get_value(&0_usize.to_be_bytes())
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        db.engine
+            .get_value(&123_usize.to_be_bytes())
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        db.engine
+            .get_value(&255_usize.to_be_bytes())
+            .unwrap()
+            .is_some()
+    );
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"f").unwrap().is_some());
 }
@@ -1061,9 +1080,9 @@ fn should_write_to_engine() {
         }
     }
 
-    let db = default_engine();
+    let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
-    let max_keys = KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT;
+    let max_keys = KvTestEngine::WRITE_BATCH_MAX_KEYS;
 
     let mut key = vec![];
     loop {
@@ -1088,6 +1107,37 @@ fn should_write_to_engine_but_whatever() {
     let max_keys = KvTestEngine::WRITE_BATCH_MAX_KEYS;
 
     let mut key = vec![];
+    loop {
+        key.push(b'a');
+        wb.put(&key, b"").unwrap();
+        if key.len() <= max_keys {
+            assert!(!wb.should_write_to_engine());
+        }
+        if key.len() > max_keys {
+            assert!(wb.should_write_to_engine());
+        }
+        if key.len() == max_keys * 2 {
+            assert!(wb.should_write_to_engine());
+            wb.write().unwrap();
+            break;
+        }
+    }
+
+    let mut key = vec![];
+    loop {
+        key.push(b'a');
+        assert!(db.engine.get_value(&key).unwrap().is_some());
+        if key.len() == max_keys * 2 {
+            break;
+        }
+    }
+
+    let db = multi_batch_write_engine();
+    let mut wb = db.engine.write_batch_with_cap(1024);
+    let max_keys = KvTestEngine::WRITE_BATCH_MAX_KEYS;
+
+    let mut key = vec![];
+
     loop {
         key.push(b'a');
         wb.put(&key, b"").unwrap();
@@ -1144,7 +1194,7 @@ fn data_size() {
 
     let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
-    let max_keys = KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT;
+    let max_keys = 256_usize;
 
     let size1 = wb.data_size();
     for i in 0..max_keys {
@@ -1171,7 +1221,7 @@ fn data_size() {
     }
     let size6 = wb.data_size();
     assert!(size5 < size6);
-    wb.delete_range(&0_usize.to_be_bytes(), &(max_keys + 1).to_be_bytes())
+    wb.delete_range(&0_usize.to_be_bytes(), &(max_keys * 2).to_be_bytes())
         .unwrap();
     let size7 = wb.data_size();
     assert!(size6 < size7);
@@ -1232,7 +1282,7 @@ fn save_point_rollback_one() {
     let mut wb = db.engine.write_batch_with_cap(1024);
 
     wb.set_save_point();
-    for i in 0..KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT {
+    for i in 0..256_usize {
         let x = i.to_be_bytes();
         wb.put(&x, &x).unwrap();
     }
@@ -1245,6 +1295,9 @@ fn save_point_rollback_one() {
     let err = wb.pop_save_point();
     assert_engine_error(err);
     wb.write().unwrap();
+    for i in 0..256_usize {
+        assert!(db.engine.get_value(&i.to_be_bytes()).unwrap().is_none());
+    }
     let val = db.engine.get_value(b"a").unwrap();
     assert!(val.is_none());
 }
@@ -1274,7 +1327,7 @@ fn save_point_rollback_two() {
 
     let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
-    let max_keys = KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT;
+    let max_keys = 256_usize;
 
     wb.set_save_point();
     for i in 0..max_keys {
@@ -1283,11 +1336,11 @@ fn save_point_rollback_two() {
     }
     wb.put(b"a", b"").unwrap();
     wb.set_save_point();
-    wb.put(b"b", b"").unwrap();
     for i in max_keys..2 * max_keys {
         let x = i.to_be_bytes();
         wb.put(&x, &x).unwrap();
     }
+    wb.put(b"b", b"").unwrap();
 
     wb.rollback_to_save_point().unwrap();
     wb.rollback_to_save_point().unwrap();
@@ -1301,6 +1354,9 @@ fn save_point_rollback_two() {
     assert!(a.is_none());
     let b = db.engine.get_value(b"b").unwrap();
     assert!(b.is_none());
+    for i in 0..2 * max_keys {
+        assert!(db.engine.get_value(&i.to_be_bytes()).unwrap().is_none());
+    }
 }
 
 #[test]
@@ -1321,7 +1377,7 @@ fn save_point_rollback_partial() {
 
     let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
-    let max_keys = KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT;
+    let max_keys = 256_usize;
 
     for i in 0..max_keys {
         let x = i.to_be_bytes();
@@ -1339,8 +1395,14 @@ fn save_point_rollback_partial() {
     wb.write().unwrap();
     let a = db.engine.get_value(b"a").unwrap();
     assert!(a.is_some());
+    for i in 0..max_keys {
+        assert!(db.engine.get_value(&i.to_be_bytes()).unwrap().is_some());
+    }
     let b = db.engine.get_value(b"b").unwrap();
     assert!(b.is_none());
+    for i in max_keys..2 * max_keys {
+        assert!(db.engine.get_value(&i.to_be_bytes()).unwrap().is_none());
+    }
 }
 
 #[test]
@@ -1368,16 +1430,15 @@ fn save_point_pop_rollback() {
 
     let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
-    let max_keys = KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT;
 
     wb.set_save_point();
-    for i in 0..max_keys {
+    for i in 0..256_usize {
         let x = i.to_be_bytes();
         wb.put(&x, &x).unwrap();
     }
     wb.put(b"a", b"").unwrap();
     wb.set_save_point();
-    for i in max_keys..2 * max_keys {
+    for i in 0..256_usize {
         let x = i.to_be_bytes();
         wb.put(&x, &x).unwrap();
     }
@@ -1395,6 +1456,9 @@ fn save_point_pop_rollback() {
     assert!(val.is_none());
     let val = db.engine.get_value(b"b").unwrap();
     assert!(val.is_none());
+    for i in 0..512_usize {
+        assert!(db.engine.get_value(&i.to_be_bytes()).unwrap().is_none());
+    }
 }
 
 #[test]
@@ -1423,12 +1487,11 @@ fn save_point_rollback_after_write() {
 
     let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
-    let max_keys = KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT;
+    let max_keys = 256_usize;
 
     wb.set_save_point();
     for i in 0..max_keys {
-        let x = i.to_be_bytes();
-        wb.put(&x, &x).unwrap();
+        wb.put(&i.to_be_bytes(), b"").unwrap();
     }
     wb.put(b"a", b"").unwrap();
 
@@ -1441,7 +1504,7 @@ fn save_point_rollback_after_write() {
 
     db.engine.delete(b"a").unwrap();
     for i in 0..max_keys {
-        wb.delete(&i.to_be_bytes()).unwrap();
+        db.engine.delete(&i.to_be_bytes()).unwrap();
     }
 
     assert!(db.engine.get_value(b"a").unwrap().is_none());
@@ -1483,11 +1546,10 @@ fn save_point_same_rollback_one() {
 
     let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
-    let max_keys = KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT;
+    let max_keys = 256_usize;
 
     for i in 0..max_keys {
-        let x = i.to_be_bytes();
-        wb.put(&x, &x).unwrap();
+        wb.put(&i.to_be_bytes(), b"").unwrap();
     }
     wb.put(b"a", b"").unwrap();
 
@@ -1497,8 +1559,7 @@ fn save_point_same_rollback_one() {
 
     wb.put(b"b", b"").unwrap();
     for i in max_keys..2 * max_keys {
-        let x = i.to_be_bytes();
-        wb.put(&x, &x).unwrap();
+        wb.put(&i.to_be_bytes(), b"").unwrap();
     }
 
     wb.rollback_to_save_point().unwrap();
@@ -1546,11 +1607,10 @@ fn save_point_same_rollback_all() {
 
     let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
-    let max_keys = KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT;
+    let max_keys = 256_usize;
 
     for i in 0..max_keys {
-        let x = i.to_be_bytes();
-        wb.put(&x, &x).unwrap();
+        wb.put(&i.to_be_bytes(), b"").unwrap();
     }
     wb.put(b"a", b"").unwrap();
 
@@ -1560,8 +1620,7 @@ fn save_point_same_rollback_all() {
 
     wb.put(b"b", b"").unwrap();
     for i in 0..max_keys {
-        let x = i.to_be_bytes();
-        wb.put(&x, &x).unwrap();
+        wb.put(&i.to_be_bytes(), b"").unwrap();
     }
 
     wb.rollback_to_save_point().unwrap();
@@ -1610,13 +1669,12 @@ fn save_point_pop_after_write() {
 
     let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
-    let max_keys = KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT;
+    let max_keys = 256_usize;
 
     wb.set_save_point();
     wb.put(b"a", b"").unwrap();
     for i in 0..max_keys {
-        let x = i.to_be_bytes();
-        wb.put(&x, &x).unwrap();
+        wb.put(&i.to_be_bytes(), b"").unwrap();
     }
 
     wb.write().unwrap();
@@ -1627,9 +1685,8 @@ fn save_point_pop_after_write() {
     }
 
     db.engine.delete(b"a").unwrap();
-
     for i in 0..max_keys {
-        wb.delete(&i.to_be_bytes()).unwrap();
+        db.engine.delete(&i.to_be_bytes()).unwrap();
     }
 
     assert!(db.engine.get_value(b"a").unwrap().is_none());
@@ -1671,26 +1728,26 @@ fn save_point_all_commands() {
 
     let db = multi_batch_write_engine();
     let mut wb = db.engine.write_batch_with_cap(1024);
-    let max_keys = KV_TEST_WRITE_BATCH_MAX_BATCH * KV_TEST_WRITE_BATCH_LIMIT;
+    let max_keys = 256_usize;
 
     for i in 0..max_keys / 2 {
-        let x = i.to_be_bytes();
-        db.engine.put(&x, &x).unwrap();
+        db.engine.put(&i.to_be_bytes(), b"").unwrap();
     }
     db.engine.put(b"a", b"").unwrap();
     for i in max_keys / 2..max_keys {
-        let x = i.to_be_bytes();
-        db.engine.put(&x, &x).unwrap();
+        db.engine.put(&i.to_be_bytes(), b"").unwrap();
     }
     db.engine.put(b"d", b"").unwrap();
 
     wb.set_save_point();
-    for i in 0..max_keys {
+    for i in 0..max_keys / 2 {
         wb.delete(&i.to_be_bytes()).unwrap();
     }
     wb.delete(b"a").unwrap();
     wb.put(b"b", b"").unwrap();
     wb.delete_range(b"c", b"e").unwrap();
+    wb.delete_range(&(max_keys / 3).to_be_bytes(), &(2 * max_keys).to_be_bytes())
+        .unwrap();
 
     wb.rollback_to_save_point().unwrap();
     wb.write().unwrap();
@@ -1698,6 +1755,9 @@ fn save_point_all_commands() {
     let a = db.engine.get_value(b"a").unwrap();
     let b = db.engine.get_value(b"b").unwrap();
     let d = db.engine.get_value(b"d").unwrap();
+    for i in 0..max_keys {
+        assert!(db.engine.get_value(&i.to_be_bytes()).unwrap().is_some());
+    }
     assert!(a.is_some());
     assert!(b.is_none());
     assert!(d.is_some());
@@ -1792,5 +1852,99 @@ fn save_points_and_counts() {
 
     assert_eq!(wb.is_empty(), true);
     assert_eq!(wb.count(), 0);
+
+    let db = multi_batch_write_engine();
+    let mut wb = db.engine.write_batch_with_cap(1024);
+    let max_keys = 256_usize;
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    wb.set_save_point();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    for i in 0..max_keys {
+        wb.put(&i.to_be_bytes(), b"").unwrap();
+    }
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), max_keys);
+
+    wb.rollback_to_save_point().unwrap();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    wb.set_save_point();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    for i in 0..max_keys {
+        wb.put(&i.to_be_bytes(), b"").unwrap();
+    }
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), max_keys);
+
+    wb.pop_save_point().unwrap();
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), max_keys);
+
+    wb.clear();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    wb.set_save_point();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    for i in 0..max_keys {
+        wb.put(&i.to_be_bytes(), b"").unwrap();
+    }
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), max_keys);
+
+    wb.write().unwrap();
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), max_keys);
+
+    wb.rollback_to_save_point().unwrap();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    wb.set_save_point();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
+
+    for i in 0..max_keys {
+        wb.put(&i.to_be_bytes(), b"").unwrap();
+    }
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), max_keys);
+
+    wb.write().unwrap();
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), max_keys);
+
+    wb.pop_save_point().unwrap();
+
+    assert_eq!(wb.is_empty(), false);
+    assert_eq!(wb.count(), max_keys);
+
+    wb.clear();
+
+    assert_eq!(wb.is_empty(), true);
+    assert_eq!(wb.count(), 0);
 }
-*/

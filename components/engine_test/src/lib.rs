@@ -83,8 +83,6 @@ pub mod kv {
     pub use engine_rocks::{
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
         RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
-        WRITE_BATCH_LIMIT as KV_TEST_WRITE_BATCH_LIMIT,
-        WRITE_BATCH_MAX_BATCH as KV_TEST_WRITE_BATCH_MAX_BATCH,
     };
     use engine_traits::Result;
 
