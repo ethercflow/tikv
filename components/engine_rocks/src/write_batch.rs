@@ -98,10 +98,12 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
         let opt: RocksWriteOptions = opts.into();
         if self.index > 0 {
+            eprintln!("self.index > 0");
             self.get_db()
                 .multi_batch_write(self.as_inner(), &opt.into_raw())
                 .map_err(Error::Engine)
         } else {
+            eprintln!("self.index = 0");
             self.get_db()
                 .write_opt(&self.wbs[0], &opt.into_raw())
                 .map_err(Error::Engine)
@@ -109,7 +111,11 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
     }
 
     fn data_size(&self) -> usize {
-        self.wbs.iter().fold(0, |a, b| a + b.data_size())
+        let mut size: usize = 0;
+        for i in 0..=self.index {
+            size += self.wbs[i].data_size();
+        }
+        size
     }
 
     fn count(&self) -> usize {
@@ -201,6 +207,7 @@ impl Mutable for RocksWriteBatchVec {
     }
 
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        eprintln!("before delete range");
         self.check_switch_batch();
         self.wbs[self.index]
             .delete_range(begin_key, end_key)
