@@ -953,11 +953,9 @@ pub struct DbConfig {
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
-    #[online_config(skip)]
     pub info_log_max_size: ReadableSize,
     #[online_config(skip)]
     pub info_log_roll_time: ReadableDuration,
-    #[online_config(skip)]
     pub info_log_keep_log_file_num: u64,
     #[online_config(skip)]
     pub info_log_dir: String,
@@ -975,7 +973,6 @@ pub struct DbConfig {
     pub rate_limiter_auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
-    #[online_config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
     #[online_config(skip)]
@@ -1156,6 +1153,14 @@ impl DbConfig {
             )
             .into());
         }
+        if self.max_sub_compactions == 0 || self.max_sub_compactions >= self.max_background_jobs {
+            return Err(format!(
+                "max_background_jobs should be greater than 0 and less than {:?}",
+                self.max_background_jobs,
+            )
+            .into());
+        }
+
         if self.max_background_flushes <= 0 || self.max_background_flushes > limit {
             return Err(format!(
                 "max_background_flushes should be greater than 0 and less than or equal to {:?}",
@@ -1545,6 +1550,24 @@ impl DBConfigManger {
         Ok(())
     }
 
+    fn set_max_subcompactions(&self, max_subcompactions: u32) -> Result<(), Box<dyn Error>> {
+        self.set_db_config(&[("max_subcompactions", &max_subcompactions.to_string())])?;
+        Ok(())
+    }
+
+    fn set_info_log_max_size(&self, info_max_log_size: u64) -> Result<(), Box<dyn Error>> {
+        self.set_db_config(&[("max_log_file_size", &info_max_log_size)])?;
+        Ok(())
+    }
+
+    fn set_info_log_keep_log_file_num(
+        &self,
+        info_log_keep_log_file_num: u64,
+    ) -> Result<(), Box<dyn Error>> {
+        self.set_db_config(&[("keep_log_file_num", &info_log_keep_log_file_num)])?;
+        Ok(())
+    }
+
     fn validate_cf(&self, cf: &str) -> Result<(), Box<dyn Error>> {
         match (self.db_type, cf) {
             (DBType::Kv, CF_DEFAULT)
@@ -1613,6 +1636,30 @@ impl ConfigManager for DBConfigManger {
         {
             let max_background_flushes = background_flushes_config.1.into();
             self.set_max_background_flushes(max_background_flushes)?;
+        }
+
+        if let Some(background_subcompactions_config) = change
+            .drain_filter(|(name, _)| name == "max_sub_compactions")
+            .next()
+        {
+            let max_subcompactions = background_subcompactions_config.1.into();
+            self.set_max_subcompactions(max_subcompactions)?;
+        }
+
+        if let Some(info_log_max_size_config) = change
+            .drain_filter(|(name, _)| name = "info_log_max_size")
+            .next()
+        {
+            let info_log_max_size: ReadableSize = info_log_max_size_config.1.into();
+            self.set_info_log_max_size(info_log_max_size as u64)?;
+        }
+
+        if let Some(info_log_keep_log_file_num_config) = change
+            .drain_filter(|(name, _)| name = "info_log_keep_log_file_num")
+            .next()
+        {
+            let info_log_keep_log_file_num = info_log_keep_log_file_num_config.1.into();
+            self.set_info_log_keep_log_file_num(info_log_keep_log_file_num)?;
         }
 
         if !change.is_empty() {
