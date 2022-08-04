@@ -5161,6 +5161,15 @@ where
             send_msg.set_end_key(region.get_end_key().to_vec());
         }
 
+        match msg.get_msg_type() {
+            MessageType::MsgAppend | MessageType::MsgHeartbeat => {
+                let mut ext_msg = ExtraMessage::default();
+                ext_msg.set_type(ExtraMessageType::MsgCollectPeerApplyIndexProgressRequest);
+                send_msg.set_extra_msg(ext_msg);
+            }
+            _ => {}
+        }
+
         send_msg.set_message(msg);
 
         Some(send_msg)

@@ -143,6 +143,7 @@ where
     /// This will be reset to 0 once it receives any messages from leader.
     missing_ticks: usize,
     hibernate_state: HibernateState,
+    applying_state: HashMap<u64, u64>,
     stopped: bool,
     has_ready: bool,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
@@ -274,6 +275,7 @@ where
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
+                applying_state: HashMap::default(),
                 stopped: false,
                 has_ready: false,
                 mailbox: None,
@@ -328,6 +330,7 @@ where
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
+                applying_state: HashMap::default(),
                 stopped: false,
                 has_ready: false,
                 mailbox: None,
@@ -2470,6 +2473,42 @@ where
         self.fsm.hibernate_state.count_vote(from.get_id());
     }
 
+    fn on_collect_peer_apply_index_process_request(&mut self, from: &metapb::Peer) {
+        if self.fsm.peer.is_leader() {
+            unreachable!();
+        }
+        let mut msg = ExtraMessage::default();
+        msg.set_type(ExtraMessageType::MsgCollectPeerApplyIndexProgressResponse);
+        // FIXME: add a new field in ExtraMessage or use ctx?
+        msg.premerge_commit = self.fsm.peer.last_applying_idx;
+        self.fsm
+            .peer
+            .send_extra_message(msg, &mut self.ctx.trans, from);
+    }
+
+    fn on_collect_peer_apply_index_process_response(
+        &mut self,
+        from: &metapb::Peer,
+        applying_idx: u64,
+    ) {
+        if !self.fsm.peer.is_leader() {
+            unreachable!();
+        }
+        if self
+            .fsm
+            .peer
+            .region()
+            .get_peers()
+            .iter()
+            .all(|p| p.get_id() != from.get_id())
+        {
+            self.fsm.applying_state.remove(&from.get_id());
+            return;
+        }
+        let prev_applying_idx = self.fsm.applying_state.entry(from.get_id()).or_insert(applying_idx);
+        *prev_applying_idx = applying_idx;
+    }
+
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
@@ -2502,6 +2541,15 @@ where
             }
             ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
                 unimplemented!()
+            }
+            ExtraMessageType::MsgCollectPeerApplyIndexProgressRequest => {
+                self.on_collect_peer_apply_index_process_request(msg.get_from_peer());
+            }
+            ExtraMessageType::MsgCollectPeerApplyIndexProgressResponse => {
+                self.on_collect_peer_apply_index_process_response(
+                    msg.get_from_peer(),
+                    msg.get_extra_msg().premerge_commit,
+                );
             }
         }
     }
