@@ -143,7 +143,6 @@ where
     /// This will be reset to 0 once it receives any messages from leader.
     missing_ticks: usize,
     hibernate_state: HibernateState,
-    applying_state: HashMap<u64, u64>,
     stopped: bool,
     has_ready: bool,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
@@ -275,7 +274,6 @@ where
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
-                applying_state: HashMap::default(),
                 stopped: false,
                 has_ready: false,
                 mailbox: None,
@@ -330,7 +328,6 @@ where
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
-                applying_state: HashMap::default(),
                 stopped: false,
                 has_ready: false,
                 mailbox: None,
@@ -2127,12 +2124,30 @@ where
                     res.applied_term,
                     &res.metrics,
                 );
+
                 // After applying, several metrics are updated, report it to pd to
                 // get fair schedule.
                 if self.fsm.peer.is_leader() {
                     self.register_pd_heartbeat_tick();
                     self.register_split_region_check_tick();
                     self.retry_pending_prepare_merge(applied_index);
+                } else {
+                    // If the follower is in hibernate state and apply index is updated,
+                    // send an extra message explicitly.
+                    if self.fsm.hibernate_state.group_state() == GroupState::Idle {
+                        let leader_id = self.fsm.peer.leader_id();
+                        let leader = self.fsm.peer.get_peer_from_cache(leader_id);
+                        if let Some(leader) = leader {
+                            let mut msg = ExtraMessage::default();
+                            msg.set_type(
+                                ExtraMessageType::MsgCollectPeerApplyIndexProgressResponse,
+                            );
+                            msg.applied_index = applied_index;
+                            self.fsm
+                                .peer
+                                .send_extra_message(msg, &mut self.ctx.trans, &leader);
+                        }
+                    }
                 }
             }
             ApplyTaskRes::Destroy {
@@ -2475,12 +2490,11 @@ where
 
     fn on_collect_peer_apply_index_process_request(&mut self, from: &metapb::Peer) {
         if self.fsm.peer.is_leader() {
-            unreachable!();
+            return;
         }
         let mut msg = ExtraMessage::default();
         msg.set_type(ExtraMessageType::MsgCollectPeerApplyIndexProgressResponse);
-        // FIXME: add a new field in ExtraMessage or use ctx?
-        msg.premerge_commit = self.fsm.peer.last_applying_idx;
+        msg.applied_index = self.fsm.peer.get_store().applied_index();
         self.fsm
             .peer
             .send_extra_message(msg, &mut self.ctx.trans, from);
@@ -2492,7 +2506,7 @@ where
         applying_idx: u64,
     ) {
         if !self.fsm.peer.is_leader() {
-            unreachable!();
+            return;
         }
         if self
             .fsm
@@ -2502,10 +2516,15 @@ where
             .iter()
             .all(|p| p.get_id() != from.get_id())
         {
-            self.fsm.applying_state.remove(&from.get_id());
+            self.fsm.peer.peer_applied_indices.remove(&from.get_id());
             return;
         }
-        let prev_applying_idx = self.fsm.applying_state.entry(from.get_id()).or_insert(applying_idx);
+        let prev_applying_idx = self
+            .fsm
+            .peer
+            .peer_applied_indices
+            .entry(from.get_id())
+            .or_insert(applying_idx);
         *prev_applying_idx = applying_idx;
     }
 
@@ -3095,6 +3114,7 @@ where
                     } else {
                         self.fsm.peer.transfer_leader(&from);
                     }
+                    self.fsm.peer.peer_applied_indices.clear();
                 }
             }
         } else {
@@ -3539,6 +3559,7 @@ where
                             .peer
                             .peers_start_pending_time
                             .retain(|&(p, _)| p != peer_id);
+                        self.fsm.peer.peer_applied_indices.remove(&peer_id);
                     }
                     self.fsm.peer.remove_peer_from_cache(peer_id);
                     // We only care remove itself now.
