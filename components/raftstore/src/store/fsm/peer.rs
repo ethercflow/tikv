@@ -2348,7 +2348,9 @@ where
         }
 
         if msg.has_extra_msg() {
-            self.on_extra_message(msg);
+            self.on_extra_message(&mut msg);
+        }
+        if !msg.has_message() {
             return Ok(());
         }
 
@@ -2528,7 +2530,7 @@ where
         *prev_applying_idx = applying_idx;
     }
 
-    fn on_extra_message(&mut self, mut msg: RaftMessage) {
+    fn on_extra_message(&mut self, msg: &mut RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if self.fsm.hibernate_state.group_state() == GroupState::Idle {

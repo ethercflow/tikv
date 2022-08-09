@@ -729,7 +729,7 @@ where
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
-    /// Record the applied index of each follower peer.
+    /// Record the applied index of each follower or learner peer.
     pub peer_applied_indices: HashMap<u64, u64>,
 
     proposals: ProposalQueue<EK::Snapshot>,
