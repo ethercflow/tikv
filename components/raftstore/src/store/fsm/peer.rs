@@ -2133,6 +2133,26 @@ where
                     self.register_pd_heartbeat_tick();
                     self.register_split_region_check_tick();
                     self.retry_pending_prepare_merge(applied_index);
+                } else {
+                    // If the follower is in hibernate state and apply index is updated, the
+                    // `safe_ts` may have been updated, so send an extra message explicitly.
+                    if self.fsm.hibernate_state.group_state() == GroupState::Idle {
+                        let leader_id = self.fsm.peer.leader_id();
+                        let leader = self.fsm.peer.get_peer_from_cache(leader_id);
+                        if let Some(leader) = leader {
+                            let mut msg = ExtraMessage::default();
+                            msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
+                            msg.miss_data = self.fsm.peer.peer.get_is_witness();
+                            msg.safe_ts = if msg.miss_data {
+                                0
+                            } else {
+                                self.fsm.peer.read_progress.safe_ts()
+                            };
+                            self.fsm
+                                .peer
+                                .send_extra_message(msg, &mut self.ctx.trans, &leader);
+                        }
+                    }
                 }
             }
             ApplyTaskRes::Destroy {
@@ -2473,6 +2493,27 @@ where
         self.fsm.hibernate_state.count_vote(from.get_id());
     }
 
+    fn on_trace_peer_availability_info(&mut self, from: &metapb::Peer, msg: &ExtraMessage) {
+        if !self.fsm.peer.is_leader() {
+            return;
+        }
+        let peer_id = from.get_id();
+        if self
+            .fsm
+            .peer
+            .region()
+            .get_peers()
+            .iter()
+            .all(|p| p.get_id() != from.get_id())
+        {
+            self.fsm.peer.peers_safe_ts.remove(&peer_id);
+            self.fsm.peer.peers_miss_data.remove(&peer_id);
+            return;
+        }
+        self.fsm.peer.peers_safe_ts.insert(peer_id, msg.safe_ts);
+        self.fsm.peer.peers_miss_data.insert(peer_id, msg.miss_data);
+    }
+
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
@@ -2505,6 +2546,9 @@ where
             }
             ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
                 unimplemented!()
+            }
+            ExtraMessageType::MsgTracePeerAvailabilityInfo => {
+                self.on_trace_peer_availability_info(msg.get_from_peer(), msg.get_extra_msg());
             }
         }
     }
@@ -3055,6 +3099,8 @@ where
                         );
                     } else {
                         self.fsm.peer.transfer_leader(&from);
+                        self.fsm.peer.peers_safe_ts.clear();
+                        self.fsm.peer.peers_miss_data.clear();
                     }
                 }
             }
@@ -3519,6 +3565,8 @@ where
                             .peer
                             .peers_start_pending_time
                             .retain(|&(p, _)| p != peer_id);
+                        self.fsm.peer.peers_safe_ts.remove(&peer_id);
+                        self.fsm.peer.peers_miss_data.remove(&peer_id);
                     }
                     self.fsm.peer.remove_peer_from_cache(peer_id);
                     // We only care remove itself now.
