@@ -876,6 +876,9 @@ where
     /// in same Ready should be applied failed.
     pending_remove: bool,
 
+    /// Indicates whether the peer is unavailable. See more in `Peer`.
+    unavailable: Arc<AtomicBool>,
+
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue<EK::Snapshot>,
     /// The counter of pending request snapshots. See more in `Peer`.
@@ -950,6 +953,7 @@ where
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
+            unavailable: reg.unavailable,
             // use a default `CmdObserveInfo` because observing is disable by default
             observe_info: CmdObserveInfo::default(),
             priority: Priority::Normal,
@@ -1994,6 +1998,8 @@ where
 
         let state = if self.pending_remove {
             PeerState::Tombstone
+        } else if self.unavailable.load(Ordering::SeqCst) {
+            PeerState::Unavailable
         } else {
             PeerState::Normal
         };
@@ -2038,6 +2044,8 @@ where
 
         let state = if self.pending_remove {
             PeerState::Tombstone
+        } else if self.unavailable.load(Ordering::SeqCst) {
+            PeerState::Unavailable
         } else {
             PeerState::Normal
         };
@@ -2139,18 +2147,16 @@ where
                     }
 
                     if exist_peer.is_witness && !peer.is_witness {
+                        // TODO: remove or change to debug level
                         error!(
-                            "can't promote witness peer to non-witness peer directly";
+                            "promote witness peer to non-witness peer directly";
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
                             "peer" => ?peer,
                             "region" => ?&self.region
                         );
-                        return Err(box_err!(
-                            "can't promote witness peer {:?} to non-witness peer in region {:?}",
-                            exist_peer,
-                            self.region
-                        ));
+                        self.unavailable.store(true, Ordering::SeqCst);
+                        exist_peer.set_is_witness(false);
                     } else if !exist_peer.is_witness && peer.is_witness {
                         exist_peer.set_is_witness(true);
                     }
@@ -3067,6 +3073,7 @@ pub struct Registration {
     pub applied_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
+    pub unavailable: Arc<AtomicBool>,
     pub is_merging: bool,
     raft_engine: Box<dyn RaftEngineReadOnly>,
 }
@@ -3080,6 +3087,7 @@ impl Registration {
             applied_term: peer.get_store().applied_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
+            unavailable: peer.unavailable.clone(),
             is_merging: peer.pending_merge_state.is_some(),
             raft_engine: Box::new(peer.get_store().engines.raft.clone()),
         }

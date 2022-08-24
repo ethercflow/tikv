@@ -11,7 +11,7 @@ use std::{
     },
     iter::{FromIterator, Iterator},
     mem,
-    sync::{Arc, Mutex},
+    sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
@@ -240,6 +240,7 @@ where
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
+        peer_unavailable: bool,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
@@ -270,6 +271,7 @@ where
                     engines,
                     region,
                     meta_peer,
+                    peer_unavailable,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -324,6 +326,7 @@ where
                     engines,
                     &region,
                     peer,
+                    false,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -1082,6 +1085,7 @@ where
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
+            PeerTick::RequestSnapshot => self.on_request_snapshot_tick(),
         }
     }
 
@@ -1092,6 +1096,9 @@ where
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
+        if self.fsm.peer.unavailable.load(Ordering::SeqCst) {
+            self.on_request_snapshot_tick();
+        }
         // Apply committed entries more quickly.
         // Or if it's a leader. This implicitly means it's a singleton
         // because it becomes leader in `Peer::new` when it's a
@@ -2149,7 +2156,8 @@ where
                         if let Some(leader) = leader {
                             let mut msg = ExtraMessage::default();
                             msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-                            msg.miss_data = self.fsm.peer.peer.get_is_witness();
+                            msg.miss_data = self.fsm.peer.peer.get_is_witness()
+                                || self.fsm.peer.unavailable.load(Ordering::SeqCst);
                             msg.safe_ts = if msg.miss_data {
                                 0
                             } else {
@@ -2383,37 +2391,40 @@ where
             Either::Right(v) => v,
         };
 
-        if util::is_vote_msg(msg.get_message()) || msg_type == MessageType::MsgTimeoutNow {
-            if self.fsm.hibernate_state.group_state() != GroupState::Chaos {
-                self.fsm.reset_hibernate_state(GroupState::Chaos);
-                self.register_raft_base_tick();
-            }
-        } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
-            self.reset_raft_tick(GroupState::Ordered);
-        }
-
         let from_peer_id = msg.get_from_peer().get_id();
-        self.fsm.peer.insert_peer_cache(msg.take_from_peer());
-
-        let result = if msg_type == MessageType::MsgTransferLeader {
-            self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
-            Ok(())
-        } else {
-            // This can be a message that sent when it's still a follower. Nevertheleast,
-            // it's meaningless to continue to handle the request as callbacks are cleared.
-            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
-                && self.fsm.peer.is_leader()
-                && (msg.get_message().get_from() == raft::INVALID_ID
-                    || msg.get_message().get_from() == self.fsm.peer_id())
-            {
-                self.ctx.raft_metrics.message_dropped.stale_msg += 1;
-                return Ok(());
+        if !self.fsm.peer.unavailable.load(Ordering::SeqCst) {
+            if util::is_vote_msg(msg.get_message()) || msg_type == MessageType::MsgTimeoutNow {
+                if self.fsm.hibernate_state.group_state() != GroupState::Chaos {
+                    self.fsm.reset_hibernate_state(GroupState::Chaos);
+                    self.register_raft_base_tick();
+                }
+            } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
+                self.reset_raft_tick(GroupState::Ordered);
             }
-            self.fsm.peer.step(self.ctx, msg.take_message())
-        };
 
-        stepped.set(result.is_ok());
+            self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
+            let result = if msg_type == MessageType::MsgTransferLeader {
+                self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
+                Ok(())
+            } else {
+                // This can be a message that sent when it's still a follower. Nevertheleast,
+                // it's meaningless to continue to handle the request as callbacks are cleared.
+                if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+                    && self.fsm.peer.is_leader()
+                    && (msg.get_message().get_from() == raft::INVALID_ID
+                        || msg.get_message().get_from() == self.fsm.peer_id())
+                {
+                    self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+                    return Ok(());
+                }
+                self.fsm.peer.step(self.ctx, msg.take_message())
+            };
+
+            stepped.set(result.is_ok());
+
+            result?;
+        }
         if is_snapshot {
             if !self.fsm.peer.has_pending_snapshot() {
                 // This snapshot is rejected by raft-rs.
@@ -2430,8 +2441,6 @@ where
                 self.destroy_regions_for_snapshot(regions_to_destroy);
             }
         }
-
-        result?;
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
@@ -3523,28 +3532,12 @@ where
                                 let _ = self.fsm.peer.get_store().clear_data();
                             }
                             (true, false) => {
-                                // unreachable
-                                panic!(
-                                    "{} is witness, but the new peer is not witness",
+                                // TODO: remove or change to debug level
+                                error!(
+                                    "{} is witness, and the new peer is not witness",
                                     self.fsm.peer.tag
                                 );
-                                // // set to uninitialized
-                                // self.fsm.peer.pending
-                                // // If the previous peer is witness, but the
-                                // new peer is not witness,
-                                // if self
-                                //     .fsm
-                                //     .peer
-                                //     .raft_group
-                                //     .request_snapshot(self.fsm.peer.
-                                // get_store().first_index())
-                                //     .is_err()
-                                // {
-                                //     // dropped, need to request later
-                                //     // TODO:
-                                // }
-                                // if self.fsm.peer.raft_group.raft.
-                                // pending_request_snapshot == INVALID_INDEX {
+                                self.schedule_tick(PeerTick::RequestSnapshot);
                             }
                             _ => {}
                         }
@@ -3830,6 +3823,7 @@ where
                 self.ctx.raftlog_fetch_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
+                false,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {
@@ -5220,6 +5214,27 @@ where
         }
         self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
         self.register_check_long_uncommitted_tick();
+    }
+
+    fn on_request_snapshot_tick(&mut self) {
+        assert!(!self.fsm.peer.is_initialized() && !self.fsm.peer.is_leader());
+        if self
+            .fsm
+            .peer
+            .raft_group
+            .request_snapshot(self.fsm.peer.get_store().first_index())
+            .is_err()
+        {
+            // there is a pending snapshot, retry
+            // TODO: may retry infinitely?
+            if self.fsm.peer.raft_group.snap().is_some()
+                || self.fsm.peer.raft_group.raft.pending_request_snapshot != INVALID_INDEX
+            {
+                self.schedule_tick(PeerTick::RequestSnapshot);
+            } else {
+                unreachable!();
+            }
+        }
     }
 
     fn register_check_leader_lease_tick(&mut self) {

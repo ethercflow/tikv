@@ -7,7 +7,7 @@ use std::{
     collections::VecDeque,
     fmt, mem,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -758,6 +758,16 @@ where
     ///   target peer.
     /// - all read requests must be rejected.
     pub pending_remove: bool,
+    /// Currently it's used to indicate whether the witness -> non-witess
+    /// convertion operation is complete. The meaning of completion is that
+    /// this peer must contain the applied data, then PD can consider that
+    /// the conversion operation is complete, and can continue to schedule
+    /// other operators to prevent the existence of multiple witnesses in
+    /// the same time period.
+    /// If it's true,
+    /// - when receives messages, this peer doesn't handle raft messages
+    /// except snapshot.
+    pub unavailable: Arc<AtomicBool>,
 
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader
@@ -910,6 +920,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
+        unavaliable: bool,
     ) -> Result<Peer<EK, ER>> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -969,6 +980,7 @@ where
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
+            unavailable: Arc::new(AtomicBool::new(unavaliable)),
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
@@ -1895,6 +1907,14 @@ where
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
 
+        for (id, miss_data) in &self.peers_miss_data {
+            if *miss_data {
+                if let Some(p) = self.get_peer_from_cache(*id) {
+                    pending_peers.push(p);
+                }
+            }
+        }
+
         if status.progress.is_none() {
             return pending_peers;
         }
@@ -2422,6 +2442,18 @@ where
 
         if !self.check_snap_status(ctx) {
             return None;
+        }
+
+        if self.unavailable.swap(false, Ordering::SeqCst) {
+            let leader_id = self.leader_id();
+            let leader = self.get_peer_from_cache(leader_id);
+            if let Some(leader) = leader {
+                let mut msg = ExtraMessage::default();
+                msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
+                msg.miss_data = false;
+                msg.safe_ts = self.read_progress.safe_ts();
+                self.send_extra_message(msg, &mut ctx.trans, &leader);
+            }
         }
 
         let mut destroy_regions = vec![];
@@ -5253,6 +5285,7 @@ where
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
             replication_status: self.region_replication_status(),
+            peers_miss_data: self.peers_miss_data.clone(),
         });
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(
@@ -5356,7 +5389,8 @@ where
             MessageType::MsgAppendResponse | MessageType::MsgHeartbeatResponse => {
                 let mut ext_msg = ExtraMessage::default();
                 ext_msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-                ext_msg.miss_data = self.peer.get_is_witness();
+                ext_msg.miss_data =
+                    self.peer.get_is_witness() || self.unavailable.load(Ordering::SeqCst);
                 ext_msg.safe_ts = if ext_msg.miss_data {
                     0
                 } else {
