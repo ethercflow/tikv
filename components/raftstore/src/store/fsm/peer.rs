@@ -2408,7 +2408,7 @@ where
                     && (msg.get_message().get_from() == raft::INVALID_ID
                         || msg.get_message().get_from() == self.fsm.peer_id())
                 {
-                    self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+                    self.ctx.raft_metrics.message_dropped.stale_msg.inc();
                     return Ok(());
                 }
                 self.fsm.peer.step(self.ctx, msg.take_message())
