@@ -5232,11 +5232,7 @@ where
             .request_snapshot(self.fsm.peer.get_store().first_index())
             .is_err()
         {
-            if self.fsm.peer.has_pending_snapshot() {
-                self.schedule_tick(PeerTick::RequestSnapshot);
-            } else {
-                unreachable!();
-            }
+            self.schedule_tick(PeerTick::RequestSnapshot);
         }
     }
 
