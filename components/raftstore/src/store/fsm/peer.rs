@@ -1079,6 +1079,7 @@ where
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
             PeerTick::RequestSnapshot => self.on_request_snapshot_tick(),
+            PeerTick::CheckNonWitnessesAvailability => self.on_check_non_witnesses_availability(),
         }
     }
 
@@ -2140,27 +2141,6 @@ where
                     self.register_pd_heartbeat_tick();
                     self.register_split_region_check_tick();
                     self.retry_pending_prepare_merge(applied_index);
-                } else {
-                    // If the follower is in hibernate state and apply index is updated, the
-                    // `safe_ts` may have been updated, so send an extra message explicitly.
-                    if self.fsm.hibernate_state.group_state() == GroupState::Idle {
-                        let leader_id = self.fsm.peer.leader_id();
-                        let leader = self.fsm.peer.get_peer_from_cache(leader_id);
-                        if let Some(leader) = leader {
-                            let mut msg = ExtraMessage::default();
-                            msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-                            msg.miss_data = self.fsm.peer.peer.get_is_witness()
-                                || self.fsm.peer.unavailable.load(Ordering::SeqCst);
-                            msg.safe_ts = if msg.miss_data {
-                                0
-                            } else {
-                                self.fsm.peer.read_progress.safe_ts()
-                            };
-                            self.fsm
-                                .peer
-                                .send_extra_message(msg, &mut self.ctx.trans, &leader);
-                        }
-                    }
                 }
             }
             ApplyTaskRes::Destroy {
@@ -2505,25 +2485,22 @@ where
         self.fsm.hibernate_state.count_vote(from.get_id());
     }
 
+    // TODO: split MsgTracePeerAvailabilityInfo to Request, Response?
     fn on_trace_peer_availability_info(&mut self, from: &metapb::Peer, msg: &ExtraMessage) {
         if !self.fsm.peer.is_leader() {
+            let mut resp = ExtraMessage::default();
+            resp.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
+            resp.miss_data = self.fsm.peer.unavailable.load(Ordering::SeqCst);
+            self.fsm
+                .peer
+                .send_extra_message(resp, &mut self.ctx.trans, from);
             return;
         }
-        let peer_id = from.get_id();
-        if self
-            .fsm
-            .peer
-            .region()
-            .get_peers()
-            .iter()
-            .all(|p| p.get_id() != from.get_id())
-        {
-            self.fsm.peer.peers_safe_ts.remove(&peer_id);
-            self.fsm.peer.peers_miss_data.remove(&peer_id);
-            return;
+        if !msg.miss_data {
+            self.fsm.peer.peers_miss_data.remove(&from.get_id());
+        } else {
+            self.register_track_non_witnesses_availability_tick();
         }
-        self.fsm.peer.peers_safe_ts.insert(peer_id, msg.safe_ts);
-        self.fsm.peer.peers_miss_data.insert(peer_id, msg.miss_data);
     }
 
     fn on_extra_message(&mut self, msg: &mut RaftMessage) {
@@ -3111,7 +3088,6 @@ where
                         );
                     } else {
                         self.fsm.peer.transfer_leader(&from);
-                        self.fsm.peer.peers_safe_ts.clear();
                         self.fsm.peer.peers_miss_data.clear();
                     }
                 }
@@ -3539,6 +3515,13 @@ where
                             }
                             _ => {}
                         }
+                    } else if self.fsm.peer.is_leader() {
+                        if peer.is_witness {
+                            self.fsm.peer.peers_miss_data.insert(peer.id, false);
+                        } else {
+                            self.fsm.peer.peers_miss_data.insert(peer.id, true);
+                            self.register_track_non_witnesses_availability_tick();
+                        }
                     }
 
                     let group_id = self
@@ -3577,7 +3560,6 @@ where
                             .peer
                             .peers_start_pending_time
                             .retain(|&(p, _)| p != peer_id);
-                        self.fsm.peer.peers_safe_ts.remove(&peer_id);
                         self.fsm.peer.peers_miss_data.remove(&peer_id);
                     }
                     self.fsm.peer.remove_peer_from_cache(peer_id);
@@ -5786,6 +5768,31 @@ where
 
     fn register_pd_heartbeat_tick(&mut self) {
         self.schedule_tick(PeerTick::PdHeartbeat)
+    }
+
+    fn register_track_non_witnesses_availability_tick(&mut self) {
+        self.schedule_tick(PeerTick::CheckNonWitnessesAvailability)
+    }
+
+    fn on_check_non_witnesses_availability(&mut self) {
+        for (peer_id, miss_data) in self.fsm.peer.peers_miss_data.iter() {
+            if *miss_data {
+                if let Some(peer) = self.fsm.peer.get_peer_from_cache(*peer_id) {
+                    let mut msg = ExtraMessage::default();
+                    msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
+                    self.fsm
+                        .peer
+                        .send_extra_message(msg, &mut self.ctx.trans, &peer);
+                }
+                // TODO: make sure if the path is reasonable
+                warn!(
+                    "peer not found, ignore check availability";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "to_peer_id" => peer_id,
+                );
+            }
+        }
     }
 
     fn on_check_peer_stale_state_tick(&mut self) {

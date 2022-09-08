@@ -731,9 +731,6 @@ where
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
-    // TODO: merge below two hashmaps?
-    /// Record the safe ts of each follower or learner peer.
-    pub peers_safe_ts: HashMap<u64, u64>,
     /// Record the data status of each follower or learner peer,
     /// used for witness -> non-witness conversion.
     pub peers_miss_data: HashMap<u64, bool>,
@@ -969,7 +966,6 @@ where
             long_uncommitted_threshold: cfg.long_uncommitted_base_threshold.0,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
-            peers_safe_ts: HashMap::default(),
             peers_miss_data: HashMap::default(),
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
@@ -1868,6 +1864,7 @@ where
         if !self.is_leader() {
             self.peer_heartbeats.clear();
             self.peers_start_pending_time.clear();
+            self.peers_miss_data.clear();
             return;
         }
 
@@ -1917,11 +1914,9 @@ where
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
 
-        for (id, miss_data) in &self.peers_miss_data {
-            if *miss_data {
-                if let Some(p) = self.get_peer_from_cache(*id) && !p.get_is_witness() {
-                    pending_peers.push(p);
-                }
+        for (peer_id, _) in &self.peers_miss_data {
+            if let Some(p) = self.get_peer_from_cache(*peer_id) && !p.get_is_witness() {
+                pending_peers.push(p);
             }
         }
 

@@ -2008,8 +2008,6 @@ where
 
         let state = if self.pending_remove {
             PeerState::Tombstone
-        } else if self.unavailable.load(Ordering::SeqCst) {
-            PeerState::Unavailable
         } else {
             PeerState::Normal
         };
@@ -2165,6 +2163,9 @@ where
                             "peer" => ?peer,
                             "region" => ?&self.region
                         );
+
+                        // TODO: split two variable, one in ApplyDelegate to mark PeerState
+                        // the other after call `raft_group.apply_conf_change`?
                         if self.id() == peer.id {
                             self.unavailable.store(true, Ordering::SeqCst);
                         }
@@ -4506,6 +4507,7 @@ mod tests {
                 applied_term: Default::default(),
                 region: Default::default(),
                 pending_request_snapshot_count: Default::default(),
+                unavailable: Default::default(),
                 is_merging: Default::default(),
                 raft_engine: Box::new(PanicEngine),
             }
@@ -4521,6 +4523,7 @@ mod tests {
                 applied_term: self.applied_term,
                 region: self.region.clone(),
                 pending_request_snapshot_count: self.pending_request_snapshot_count.clone(),
+                unavailable: self.unavailable.clone(),
                 is_merging: self.is_merging,
                 raft_engine: Box::new(PanicEngine),
             }

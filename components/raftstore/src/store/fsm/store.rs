@@ -558,6 +558,9 @@ where
         // TODO: Is it reasonable to use raft_base_tick_interval
         self.tick_batch[PeerTick::RequestSnapshot as usize].wait_duration =
             self.cfg.raft_base_tick_interval.0;
+        // TODO: add a new cfg?
+        self.tick_batch[PeerTick::CheckNonWitnessesAvailability as usize].wait_duration =
+            self.cfg.pd_heartbeat_tick_interval.0;
     }
 }
 

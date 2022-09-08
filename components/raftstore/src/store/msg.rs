@@ -319,6 +319,7 @@ pub enum PeerTick {
     ReportBuckets = 9,
     CheckLongUncommitted = 10,
     RequestSnapshot = 11,
+    CheckNonWitnessesAvailability = 12,
 }
 
 impl PeerTick {
@@ -339,6 +340,7 @@ impl PeerTick {
             PeerTick::ReportBuckets => "report_buckets",
             PeerTick::CheckLongUncommitted => "check_long_uncommitted",
             PeerTick::RequestSnapshot => "request_snapshot",
+            PeerTick::CheckNonWitnessesAvailability => "check_non_witness_availability",
         }
     }
 
@@ -356,6 +358,7 @@ impl PeerTick {
             PeerTick::ReportBuckets,
             PeerTick::CheckLongUncommitted,
             PeerTick::RequestSnapshot,
+            PeerTick::CheckNonWitnessesAvailability,
         ];
         TICKS
     }
