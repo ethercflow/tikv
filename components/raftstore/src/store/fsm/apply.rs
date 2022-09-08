@@ -2139,19 +2139,6 @@ where
                             || ((role, change_type) == (PeerRole::Voter, ConfChangeType::AddNode) && !is_witness_change)
                             || ((role, change_type) == (PeerRole::Learner, ConfChangeType::AddLearnerNode) && !is_witness_change)
                     {
-                        // When PD detects that the non-witness operator is not finished, it will
-                        // retry, so returns directly.
-                        if self.unavailable.load(Ordering::SeqCst) {
-                            info!("conf change ignored, wait for applying latest snapshot done";
-                                  "region_id" => self.region_id(),
-                                  "peer_id" => self.id(),
-                                  "changes" => ?changes,
-                                  "original region" => ?&self.region,
-                                  "current region" => ?&region,
-                            );
-                            return Ok(region);
-                        }
-
                         error!(
                             "can't add duplicated peer";
                             "region_id" => self.region_id(),
@@ -2178,7 +2165,9 @@ where
                             "peer" => ?peer,
                             "region" => ?&self.region
                         );
-                        self.unavailable.store(true, Ordering::SeqCst);
+                        if self.id() == peer.id {
+                            self.unavailable.store(true, Ordering::SeqCst);
+                        }
                         exist_peer.set_is_witness(false);
                     } else if !exist_peer.is_witness && peer.is_witness {
                         exist_peer.set_is_witness(true);
