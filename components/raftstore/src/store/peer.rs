@@ -5327,22 +5327,6 @@ where
             send_msg.set_end_key(region.get_end_key().to_vec());
         }
 
-        match msg.get_msg_type() {
-            MessageType::MsgAppendResponse | MessageType::MsgHeartbeatResponse => {
-                let mut ext_msg = ExtraMessage::default();
-                ext_msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-                ext_msg.miss_data =
-                    self.peer.get_is_witness() || self.unavailable.load(Ordering::SeqCst);
-                ext_msg.safe_ts = if ext_msg.miss_data {
-                    0
-                } else {
-                    self.read_progress.safe_ts()
-                };
-                send_msg.set_extra_msg(ext_msg);
-            }
-            _ => {}
-        }
-
         send_msg.set_message(msg);
 
         Some(send_msg)
