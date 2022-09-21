@@ -1912,7 +1912,10 @@ pub mod tests {
         let mut s2 = new_storage(sched.clone(), dummy_scheduler.clone(), &td2);
         assert_eq!(s2.first_index(), Ok(s2.applied_index() + 1));
         let mut write_task = WriteTask::new(s2.get_region_id(), s2.peer_id, 1);
-        if let HandleReadyResult::Snapshot { snap_region, .. } = s2.apply_snapshot(&snap1, &mut write_task, vec![], vec![]).unwrap() {
+        if let HandleReadyResult::Snapshot { snap_region, .. } = s2
+            .apply_snapshot(&snap1, &mut write_task, vec![], vec![])
+            .unwrap()
+        {
             let mut snap_data = RaftSnapshotData::default();
             snap_data.merge_from_bytes(snap1.get_data()).unwrap();
             assert_eq!(snap_region, snap_data.take_region());
@@ -1930,7 +1933,10 @@ pub mod tests {
         let mut s3 = new_storage_from_ents(sched, dummy_scheduler, &td3, ents);
         validate_cache(&s3, &ents[1..]);
         let mut write_task = WriteTask::new(s3.get_region_id(), s3.peer_id, 1);
-        if let HandleReadyResult::Snapshot { snap_region, .. } = s3.apply_snapshot(&snap1, &mut write_task, vec![], vec![]).unwrap() {
+        if let HandleReadyResult::Snapshot { snap_region, .. } = s3
+            .apply_snapshot(&snap1, &mut write_task, vec![], vec![])
+            .unwrap()
+        {
             let mut snap_data = RaftSnapshotData::default();
             snap_data.merge_from_bytes(snap1.get_data()).unwrap();
             assert_eq!(snap_region, snap_data.take_region());
