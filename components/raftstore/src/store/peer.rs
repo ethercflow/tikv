@@ -915,6 +915,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
+        unavaliable: bool,
     ) -> Result<Peer<EK, ER>> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -973,7 +974,7 @@ where
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
-            unavailable: Arc::new(AtomicBool::new(false)),
+            unavailable: Arc::new(AtomicBool::new(unavaliable)),
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
@@ -1558,6 +1559,11 @@ where
     }
 
     #[inline]
+    pub fn is_unavailable(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+
+    #[inline]
     pub fn get_role(&self) -> StateRole {
         self.raft_group.raft.state
     }
@@ -1910,6 +1916,12 @@ where
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
 
+        for (peer_id, miss_data) in &self.peers_miss_data {
+            if let Some(p) = self.get_peer_from_cache(*peer_id) && *miss_data {
+                pending_peers.push(p);
+            }
+        }
+
         if status.progress.is_none() {
             return pending_peers;
         }
@@ -1984,6 +1996,9 @@ where
         }
         for i in 0..self.peers_start_pending_time.len() {
             if self.peers_start_pending_time[i].0 != peer_id {
+                continue;
+            }
+            if let Some(miss_data) = self.peers_miss_data.get(&peer_id) && *miss_data {
                 continue;
             }
             let truncated_idx = self.raft_group.store().truncated_index();
@@ -2411,6 +2426,7 @@ where
                 self.read_progress.resume();
                 // Update apply index to `last_applying_idx`
                 self.read_progress.update_applied(self.last_applying_idx);
+                self.notify_leader_non_witness_is_available(ctx);
             }
             CheckApplyingSnapStatus::Idle => {
                 // FIXME: It's possible that the snapshot applying task is canceled.
@@ -2425,6 +2441,29 @@ where
         }
         assert_eq!(self.apply_snap_ctx, None);
         true
+    }
+
+    fn notify_leader_non_witness_is_available<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) {
+        if self.unavailable.swap(false, Ordering::SeqCst) {
+            fail_point!("ignore notify leader non-witness is available", |_| {});
+            let leader_id = self.leader_id();
+            let leader = self.get_peer_from_cache(leader_id);
+            if let Some(leader) = leader {
+                let mut msg = ExtraMessage::default();
+                msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
+                msg.miss_data = false;
+                msg.safe_ts = self.read_progress.safe_ts();
+                self.send_extra_message(msg, &mut ctx.trans, &leader);
+                info!(
+                    "notify leader non-witness is available";
+                    "region id" => self.region().get_id(),
+                    "peer id" => self.peer.id
+                );
+            }
+        }
     }
 
     pub fn handle_raft_ready_append<T: Transport>(
