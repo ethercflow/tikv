@@ -983,7 +983,7 @@ where
             }
 
             let peer = util::find_peer_by_id(&self.region, self.id).unwrap();
-            if !peer.is_witness {
+            if !peer.is_witness && !self.unavailable.load(Ordering::SeqCst) {
                 let expect_index = self.apply_state.get_applied_index() + 1;
                 if expect_index != entry.get_index() {
                     panic!(
