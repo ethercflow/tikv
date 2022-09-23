@@ -2876,7 +2876,7 @@ where
             );
             let commit_term = self.get_store().term(commit_index).unwrap();
 
-            if self.is_witness() {
+            if self.is_witness() && self.is_unavailable() {
                 committed_entries = committed_entries
                     .into_iter()
                     .filter(|e| {

@@ -3519,6 +3519,7 @@ where
                                     "{} requests snapshot to make the new non-witness peer available",
                                     self.fsm.peer.tag
                                 );
+                                fail_point!("before request snapshot");
                                 self.on_request_snapshot_tick();
                             }
                             _ => {}
