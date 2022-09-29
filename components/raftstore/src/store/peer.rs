@@ -889,7 +889,7 @@ where
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
     /// Record the data status of each follower or learner peer.
-    pub peers_miss_data: HashMap<u64, bool>,
+    pub peers_miss_data: HashSet<u64>,
 
     proposals: ProposalQueue<Callback<EK::Snapshot>>,
     leader_missing_time: Option<Instant>,
@@ -1121,7 +1121,7 @@ where
             long_uncommitted_threshold: cfg.long_uncommitted_base_threshold.0,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
-            peers_miss_data: HashMap::default(),
+            peers_miss_data: HashSet::default(),
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
             size_diff_hint: 0,

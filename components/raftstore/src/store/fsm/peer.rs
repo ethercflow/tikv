@@ -3675,10 +3675,9 @@ where
                     self.fsm.peer.peer_heartbeats.insert(peer_id, now);
                     if self.fsm.peer.is_leader() {
                         if peer.is_witness {
-                            self.fsm.peer.peers_miss_data.insert(peer.id, false);
+                            self.fsm.peer.peers_miss_data.insert(peer.id);
                         } else {
-                            // TODO: add judgment condition: prew_peer_is_witness
-                            self.fsm.peer.peers_miss_data.insert(peer.id, true);
+                            // TODO: add judgment condition: prev_peer_is_witness
                             self.register_check_peers_availability_tick();
                         }
                         need_ping = true;
@@ -5904,28 +5903,26 @@ where
     }
 
     fn on_check_peers_availability(&mut self) {
-        for (peer_id, miss_data) in self.fsm.peer.peers_miss_data.iter() {
-            if *miss_data {
-                if let Some(peer) = self.fsm.peer.get_peer_from_cache(*peer_id) {
-                    let mut msg = ExtraMessage::default();
-                    msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-                    self.fsm
-                        .peer
-                        .send_extra_message(msg, &mut self.ctx.trans, &peer);
-                    info!(
-                        "check peer availability";
-                        "target peer id" => *peer_id,
-                    );
-                    continue;
-                }
-                // TODO: make sure if the path is reasonable
-                warn!(
-                    "peer not found, ignore check availability";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "to_peer_id" => peer_id,
+        for peer_id in self.fsm.peer.peers_miss_data.iter() {
+            if let Some(peer) = self.fsm.peer.get_peer_from_cache(*peer_id) && !peer.is_witness {
+                let mut msg = ExtraMessage::default();
+                msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
+                self.fsm
+                    .peer
+                    .send_extra_message(msg, &mut self.ctx.trans, &peer);
+                info!(
+                    "check peer availability";
+                    "target peer id" => *peer_id,
                 );
+                continue;
             }
+            // TODO: make sure if the path is reasonable
+            warn!(
+                "peer not found, ignore check availability";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "to_peer_id" => peer_id,
+            );
         }
     }
 
