@@ -318,7 +318,7 @@ pub enum PeerTick {
     ReactivateMemoryLock = 8,
     ReportBuckets = 9,
     CheckLongUncommitted = 10,
-    CheckNonWitnessesAvailability = 11,
+    CheckPeersAvailability = 11,
     RequestSnapshot = 12,
 }
 
@@ -339,7 +339,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
             PeerTick::ReportBuckets => "report_buckets",
             PeerTick::CheckLongUncommitted => "check_long_uncommitted",
-            PeerTick::CheckNonWitnessesAvailability => "check_non_witness_availability",
+            PeerTick::CheckPeersAvailability => "check_peers_availability",
             PeerTick::RequestSnapshot => "request_snapshot",
         }
     }
@@ -357,7 +357,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock,
             PeerTick::ReportBuckets,
             PeerTick::CheckLongUncommitted,
-            PeerTick::CheckNonWitnessesAvailability,
+            PeerTick::CheckPeersAvailability,
             PeerTick::RequestSnapshot,
         ];
         TICKS

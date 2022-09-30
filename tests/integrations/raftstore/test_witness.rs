@@ -132,10 +132,7 @@ fn test_witness_leader_down() {
 fn test_non_witness_availability(fp: &str) {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
-    cluster
-        .cfg
-        .raft_store
-        .check_non_witnesses_availability_interval = ReadableDuration::millis(20);
+    cluster.cfg.raft_store.check_peers_availability_interval = ReadableDuration::millis(20);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);

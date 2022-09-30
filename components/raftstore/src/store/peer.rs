@@ -7,7 +7,7 @@ use std::{
     collections::VecDeque,
     fmt, mem,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -731,9 +731,8 @@ where
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
-    /// Record the data status of each follower or learner peer,
-    /// used for witness -> non-witness conversion.
-    pub peers_miss_data: HashMap<u64, bool>,
+    /// Record the waiting data status of each follower or learner peer.
+    pub wait_data_peers: Vec<u64>,
 
     proposals: ProposalQueue<Callback<EK::Snapshot>>,
     leader_missing_time: Option<Instant>,
@@ -762,7 +761,7 @@ where
     /// the conversion operation is complete, and can continue to schedule
     /// other operators to prevent the existence of multiple witnesses in
     /// the same time period.
-    pub unavailable: Arc<AtomicBool>,
+    pub wait_data: bool,
 
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader
@@ -915,7 +914,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
-        unavaliable: bool,
+        wait_data: bool,
     ) -> Result<Peer<EK, ER>> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -963,7 +962,7 @@ where
             long_uncommitted_threshold: cfg.long_uncommitted_base_threshold.0,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
-            peers_miss_data: HashMap::default(),
+            wait_data_peers: Vec::default(),
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
             size_diff_hint: 0,
@@ -974,7 +973,7 @@ where
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
-            unavailable: Arc::new(AtomicBool::new(unavaliable)),
+            wait_data,
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
@@ -1559,11 +1558,6 @@ where
     }
 
     #[inline]
-    pub fn is_unavailable(&self) -> bool {
-        self.unavailable.load(Ordering::SeqCst)
-    }
-
-    #[inline]
     pub fn get_role(&self) -> StateRole {
         self.raft_group.raft.state
     }
@@ -1866,7 +1860,7 @@ where
         if !self.is_leader() {
             self.peer_heartbeats.clear();
             self.peers_start_pending_time.clear();
-            self.peers_miss_data.clear();
+            self.wait_data_peers.clear();
             return;
         }
 
@@ -1916,8 +1910,8 @@ where
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
 
-        for (peer_id, miss_data) in &self.peers_miss_data {
-            if let Some(p) = self.get_peer_from_cache(*peer_id) && *miss_data {
+        for peer_id in &self.wait_data_peers {
+            if let Some(p) = self.get_peer_from_cache(*peer_id) {
                 pending_peers.push(p);
             }
         }
@@ -1998,7 +1992,7 @@ where
             if self.peers_start_pending_time[i].0 != peer_id {
                 continue;
             }
-            if let Some(miss_data) = self.peers_miss_data.get(&peer_id) && *miss_data {
+            if self.wait_data_peers.contains(&peer_id) {
                 continue;
             }
             let truncated_idx = self.raft_group.store().truncated_index();
@@ -2426,7 +2420,7 @@ where
                 self.read_progress.resume();
                 // Update apply index to `last_applying_idx`
                 self.read_progress.update_applied(self.last_applying_idx);
-                self.notify_leader_non_witness_is_available(ctx);
+                self.notify_leader_the_peer_is_available(ctx);
             }
             CheckApplyingSnapStatus::Idle => {
                 // FIXME: It's possible that the snapshot applying task is canceled.
@@ -2443,22 +2437,22 @@ where
         true
     }
 
-    fn notify_leader_non_witness_is_available<T: Transport>(
+    fn notify_leader_the_peer_is_available<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
-        if self.unavailable.swap(false, Ordering::SeqCst) {
-            fail_point!("ignore notify leader non-witness is available", |_| {});
+        if self.wait_data {
+            self.wait_data = false;
+            fail_point!("ignore notify leader the peer is available", |_| {});
             let leader_id = self.leader_id();
             let leader = self.get_peer_from_cache(leader_id);
             if let Some(leader) = leader {
                 let mut msg = ExtraMessage::default();
                 msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-                msg.miss_data = false;
-                msg.safe_ts = self.read_progress.safe_ts();
+                msg.wait_data = false;
                 self.send_extra_message(msg, &mut ctx.trans, &leader);
                 info!(
-                    "notify leader non-witness is available";
+                    "notify leader the leader is available";
                     "region id" => self.region().get_id(),
                     "peer id" => self.peer.id
                 );
@@ -5244,7 +5238,7 @@ where
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
             replication_status: self.region_replication_status(),
-            peers_miss_data: self.peers_miss_data.clone(),
+            wait_data_peers: self.wait_data_peers.clone(),
         });
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(

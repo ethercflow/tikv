@@ -865,8 +865,8 @@ where
     /// in same Ready should be applied failed.
     pending_remove: bool,
 
-    /// Indicates whether the peer is unavailable. See more in `Peer`.
-    unavailable: Arc<AtomicBool>,
+    /// Indicates whether the peer is waiting data. See more in `Peer`.
+    wait_data: bool,
 
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue<Callback<EK::Snapshot>>,
@@ -942,7 +942,7 @@ where
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
-            unavailable: reg.unavailable,
+            wait_data: reg.wait_data,
             // use a default `CmdObserveInfo` because observing is disable by default
             observe_info: CmdObserveInfo::default(),
             priority: Priority::Normal,
@@ -983,7 +983,7 @@ where
             }
 
             let peer = util::find_peer_by_id(&self.region, self.id).unwrap();
-            if !peer.is_witness {
+            if !peer.is_witness && !self.wait_data {
                 let expect_index = self.apply_state.get_applied_index() + 1;
                 if expect_index != entry.get_index() {
                     panic!(
@@ -2052,7 +2052,7 @@ where
 
         let state = if self.pending_remove {
             PeerState::Tombstone
-        } else if self.unavailable.load(Ordering::SeqCst) {
+        } else if self.wait_data {
             PeerState::Unavailable
         } else {
             PeerState::Normal
@@ -2156,7 +2156,7 @@ where
 
                     if exist_peer.is_witness && !peer.is_witness {
                         if self.id() == peer.id {
-                            self.unavailable.store(true, Ordering::SeqCst);
+                            self.wait_data = true;
                         }
                         exist_peer.set_is_witness(false);
                     } else if !exist_peer.is_witness && peer.is_witness {
@@ -3072,7 +3072,7 @@ pub struct Registration {
     pub applied_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
-    pub unavailable: Arc<AtomicBool>,
+    pub wait_data: bool,
     pub is_merging: bool,
     raft_engine: Box<dyn RaftEngineReadOnly>,
 }
@@ -3086,7 +3086,7 @@ impl Registration {
             applied_term: peer.get_store().applied_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
-            unavailable: peer.unavailable.clone(),
+            wait_data: peer.wait_data,
             is_merging: peer.pending_merge_state.is_some(),
             raft_engine: Box::new(peer.get_store().engines.raft.clone()),
         }
@@ -4496,7 +4496,7 @@ mod tests {
                 applied_term: Default::default(),
                 region: Default::default(),
                 pending_request_snapshot_count: Default::default(),
-                unavailable: Default::default(),
+                wait_data: Default::default(),
                 is_merging: Default::default(),
                 raft_engine: Box::new(PanicEngine),
             }
@@ -4512,7 +4512,7 @@ mod tests {
                 applied_term: self.applied_term,
                 region: self.region.clone(),
                 pending_request_snapshot_count: self.pending_request_snapshot_count.clone(),
-                unavailable: self.unavailable.clone(),
+                wait_data: self.wait_data,
                 is_merging: self.is_merging,
                 raft_engine: Box::new(PanicEngine),
             }

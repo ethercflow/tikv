@@ -11,7 +11,7 @@ use std::{
     },
     iter::{FromIterator, Iterator},
     mem,
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
@@ -241,7 +241,7 @@ where
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
-        peer_unavailable: bool,
+        wait_data: bool,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
@@ -272,7 +272,7 @@ where
                     engines,
                     region,
                     meta_peer,
-                    peer_unavailable,
+                    wait_data,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -1078,7 +1078,7 @@ where
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
-            PeerTick::CheckNonWitnessesAvailability => self.on_check_non_witnesses_availability(),
+            PeerTick::CheckPeersAvailability => self.on_check_peers_availability(),
             PeerTick::RequestSnapshot => self.on_request_snapshot_tick(),
         }
     }
@@ -1090,7 +1090,7 @@ where
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
-        if self.fsm.peer.unavailable.load(Ordering::SeqCst) {
+        if self.fsm.peer.wait_data {
             self.on_request_snapshot_tick();
         }
         // Apply committed entries more quickly.
@@ -2341,10 +2341,7 @@ where
         }
 
         if msg.has_extra_msg() {
-            self.on_extra_message(&mut msg);
-        }
-
-        if !msg.has_message() {
+            self.on_extra_message(msg);
             return Ok(());
         }
 
@@ -2488,30 +2485,33 @@ where
         if !self.fsm.peer.is_leader() {
             let mut resp = ExtraMessage::default();
             resp.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-            resp.miss_data = self.fsm.peer.unavailable.load(Ordering::SeqCst);
+            resp.wait_data = self.fsm.peer.wait_data;
             self.fsm
                 .peer
                 .send_extra_message(resp, &mut self.ctx.trans, from);
             info!(
-                "non-witness response availability info to leader";
+                "peer responses availability info to leader";
                 "region_id" => self.region().get_id(),
                 "peer_id" => self.fsm.peer.peer.get_id(),
                 "leader_id" => from.id,
             );
             return;
         }
-        if !msg.miss_data {
-            self.fsm.peer.peers_miss_data.remove(&from.get_id());
+        if !msg.wait_data {
+            self.fsm
+                .peer
+                .wait_data_peers
+                .retain(|id| *id != from.get_id());
             info!(
-                "receive non-witness ready info";
+                "receive peer ready info";
                 "peer_id" => self.fsm.peer.peer.get_id(),
             );
             return;
         }
-        self.register_track_non_witnesses_availability_tick();
+        self.register_check_peers_availability_tick();
     }
 
-    fn on_extra_message(&mut self, msg: &mut RaftMessage) {
+    fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if self.fsm.hibernate_state.group_state() == GroupState::Idle {
@@ -3096,7 +3096,7 @@ where
                         );
                     } else {
                         self.fsm.peer.transfer_leader(&from);
-                        self.fsm.peer.peers_miss_data.clear();
+                        self.fsm.peer.wait_data_peers.clear();
                     }
                 }
             }
@@ -3523,13 +3523,6 @@ where
                             }
                             _ => {}
                         }
-                    } else if self.fsm.peer.is_leader() {
-                        if peer.is_witness {
-                            self.fsm.peer.peers_miss_data.insert(peer.id, false);
-                        } else {
-                            self.fsm.peer.peers_miss_data.insert(peer.id, true);
-                            self.register_track_non_witnesses_availability_tick();
-                        }
                     }
 
                     let group_id = self
@@ -3550,6 +3543,10 @@ where
                     // Add this peer to peer_heartbeats.
                     self.fsm.peer.peer_heartbeats.insert(peer_id, now);
                     if self.fsm.peer.is_leader() {
+                        if prev_peer_is_witness && !peer.is_witness {
+                            self.fsm.peer.wait_data_peers.push(peer.id);
+                            self.register_check_peers_availability_tick();
+                        }
                         need_ping = true;
                         self.fsm.peer.peers_start_pending_time.push((peer_id, now));
                         // As `raft_max_inflight_msgs` may have been updated via online config
@@ -3568,7 +3565,7 @@ where
                             .peer
                             .peers_start_pending_time
                             .retain(|&(p, _)| p != peer_id);
-                        self.fsm.peer.peers_miss_data.remove(&peer_id);
+                        self.fsm.peer.wait_data_peers.retain(|id| *id != peer_id);
                     }
                     self.fsm.peer.remove_peer_from_cache(peer_id);
                     // We only care remove itself now.
@@ -4820,7 +4817,7 @@ where
 
         // Forbid reads when it's just became non-witness but not done apply
         // snapshot.
-        if self.fsm.peer.is_unavailable() {
+        if self.fsm.peer.wait_data {
             return Err(Error::RecoveryInProgress(self.region_id()));
         }
 
@@ -5785,37 +5782,32 @@ where
         self.schedule_tick(PeerTick::PdHeartbeat)
     }
 
-    fn register_track_non_witnesses_availability_tick(&mut self) {
-        fail_point!(
-            "ignore schedule check non-witness availability tick",
-            |_| {}
-        );
-        self.schedule_tick(PeerTick::CheckNonWitnessesAvailability)
+    fn register_check_peers_availability_tick(&mut self) {
+        fail_point!("ignore schedule check peers availability tick", |_| {});
+        self.schedule_tick(PeerTick::CheckPeersAvailability)
     }
 
-    fn on_check_non_witnesses_availability(&mut self) {
-        for (peer_id, miss_data) in self.fsm.peer.peers_miss_data.iter() {
-            if *miss_data {
-                if let Some(peer) = self.fsm.peer.get_peer_from_cache(*peer_id) {
-                    let mut msg = ExtraMessage::default();
-                    msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-                    self.fsm
-                        .peer
-                        .send_extra_message(msg, &mut self.ctx.trans, &peer);
-                    info!(
-                        "check non-witness availability";
-                        "target peer id" => *peer_id,
-                    );
-                    continue;
-                }
-                // TODO: make sure if the path is reasonable
-                warn!(
-                    "peer not found, ignore check availability";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "to_peer_id" => peer_id,
+    fn on_check_peers_availability(&mut self) {
+        for peer_id in &self.fsm.peer.wait_data_peers {
+            if let Some(peer) = self.fsm.peer.get_peer_from_cache(*peer_id) {
+                let mut msg = ExtraMessage::default();
+                msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
+                self.fsm
+                    .peer
+                    .send_extra_message(msg, &mut self.ctx.trans, &peer);
+                info!(
+                    "check peer availability";
+                    "target peer id" => *peer_id,
                 );
+                continue;
             }
+            // TODO: make sure if the path is reasonable
+            warn!(
+                "peer not found, ignore check availability";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "to_peer_id" => peer_id,
+            );
         }
     }
 
