@@ -4761,6 +4761,7 @@ mod tests {
             cbs,
             None,
             None,
+            false,
         )
     }
 

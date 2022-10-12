@@ -5,9 +5,8 @@ use std::{iter::FromIterator, sync::Arc, time::Duration};
 use futures::executor::block_on;
 use kvproto::metapb;
 use pd_client::PdClient;
-use raftstore::store::util::find_peer;
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
+use tikv_util::{config::ReadableDuration, store::find_peer};
 
 #[test]
 fn test_request_snapshot_after_reboot() {

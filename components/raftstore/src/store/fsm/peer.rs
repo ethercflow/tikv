@@ -3712,7 +3712,7 @@ where
                                     "{} requests snapshot to make the new non-witness peer available",
                                     self.fsm.peer.tag
                                 );
-                                self.fsm.peer.unavailable = true;
+                                self.fsm.peer.wait_data = true;
                                 self.on_request_snapshot_tick();
                             }
                             _ => {}
