@@ -910,6 +910,9 @@ where
     /// in same Ready should be applied failed.
     pending_remove: bool,
 
+    /// Indicates whether the peer is waiting data. See more in `Peer`.
+    wait_data: bool,
+
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue<Callback<EK::Snapshot>>,
     /// The counter of pending request snapshots. See more in `Peer`.
@@ -986,6 +989,7 @@ where
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
+            wait_data: reg.wait_data,
             // use a default `CmdObserveInfo` because observing is disable by default
             observe_info: CmdObserveInfo::default(),
             priority: Priority::Normal,
@@ -1028,7 +1032,7 @@ where
 
             let peer = find_peer_by_id(&self.region, self.id).unwrap();
             // the applied index of witness is not continuous, skip index check
-            if !peer.is_witness {
+            if !peer.is_witness && !self.wait_data {
                 let expect_index = self.apply_state.get_applied_index() + 1;
                 if expect_index != entry.get_index() {
                     panic!(
@@ -2098,6 +2102,8 @@ where
 
         let state = if self.pending_remove {
             PeerState::Tombstone
+        } else if self.wait_data {
+            PeerState::Unavailable
         } else {
             PeerState::Normal
         };
@@ -2199,18 +2205,10 @@ where
                     }
 
                     if exist_peer.is_witness && !peer.is_witness {
-                        error!(
-                            "can't promote witness peer to non-witness peer directly";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "peer" => ?peer,
-                            "region" => ?&self.region
-                        );
-                        return Err(box_err!(
-                            "can't promote witness peer {:?} to non-witness peer in region {:?}",
-                            exist_peer,
-                            self.region
-                        ));
+                        if self.id() == peer.id {
+                            self.wait_data = true;
+                        }
+                        exist_peer.set_is_witness(false);
                     } else if !exist_peer.is_witness && peer.is_witness {
                         exist_peer.set_is_witness(true);
                     }
@@ -3044,6 +3042,7 @@ pub struct Apply<C> {
     // such as `CompactLog`. So pass it to the apply fsm to override applied index at begin to
     // avoid unexpected failure.
     pub last_applied_state: Option<(u64, u64)>, // (applied_index, applied_term)
+    pub wait_data: bool,
 }
 
 impl<C: WriteCallback> Apply<C> {
@@ -3057,6 +3056,7 @@ impl<C: WriteCallback> Apply<C> {
         cbs: Vec<Proposal<C>>,
         buckets: Option<Arc<BucketMeta>>,
         last_applied_state: Option<(u64, u64)>,
+        wait_data: bool,
     ) -> Apply<C> {
         let mut entries_size = 0;
         for e in &entries {
@@ -3074,6 +3074,7 @@ impl<C: WriteCallback> Apply<C> {
             cbs,
             bucket_meta: buckets,
             last_applied_state,
+            wait_data,
         }
     }
 
@@ -3128,6 +3129,7 @@ pub struct Registration {
     pub applied_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
+    pub wait_data: bool,
     pub is_merging: bool,
     raft_engine: Box<dyn RaftEngineReadOnly>,
 }
@@ -3141,6 +3143,7 @@ impl Registration {
             applied_term: peer.get_store().applied_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
+            wait_data: peer.wait_data,
             is_merging: peer.pending_merge_state.is_some(),
             raft_engine: Box::new(peer.get_store().engines.raft.clone()),
         }
@@ -3502,6 +3505,7 @@ where
             self.delegate.apply_state.set_applied_index(idx);
             self.delegate.applied_term = term;
         }
+        self.delegate.wait_data = apply.wait_data;
 
         let mut entries = Vec::new();
 
@@ -4570,6 +4574,7 @@ mod tests {
                 applied_term: Default::default(),
                 region: Default::default(),
                 pending_request_snapshot_count: Default::default(),
+                wait_data: Default::default(),
                 is_merging: Default::default(),
                 raft_engine: Box::new(PanicEngine),
             }
@@ -4585,6 +4590,7 @@ mod tests {
                 applied_term: self.applied_term,
                 region: self.region.clone(),
                 pending_request_snapshot_count: self.pending_request_snapshot_count.clone(),
+                wait_data: self.wait_data,
                 is_merging: self.is_merging,
                 raft_engine: Box::new(PanicEngine),
             }

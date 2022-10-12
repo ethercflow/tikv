@@ -248,6 +248,7 @@ where
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
+        wait_data: bool,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match find_peer(region, store_id) {
             None => {
@@ -278,6 +279,7 @@ where
                     engines,
                     region,
                     meta_peer,
+                    wait_data,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -332,6 +334,7 @@ where
                     engines,
                     &region,
                     peer,
+                    false,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -1224,6 +1227,7 @@ where
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
             PeerTick::CheckPeersAvailability => self.on_check_peers_availability(),
+            PeerTick::RequestSnapshot => self.on_request_snapshot_tick(),
         }
     }
 
@@ -1234,6 +1238,9 @@ where
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
+        if self.fsm.peer.wait_data {
+            self.on_request_snapshot_tick();
+        }
         // Apply committed entries more quickly.
         // Or if it's a leader. This implicitly means it's a singleton
         // because it becomes leader in `Peer::new` when it's a
@@ -3668,6 +3675,16 @@ where
             // test_redundant_conf_change_by_snapshot.
         }
 
+        let mut prev_witnesses: Vec<u64> = vec![];
+        if self.fsm.peer.is_leader() {
+            prev_witnesses = self
+                .region()
+                .get_peers()
+                .iter()
+                .filter(|peer| peer.is_witness)
+                .map(|peer| peer.id)
+                .collect::<Vec<u64>>();
+        }
         let prev_peer_is_witness = self.fsm.peer.is_witness();
         self.update_region(cp.region);
 
@@ -3691,11 +3708,12 @@ where
                             }
                             (true, false) => {
                                 self.fsm.peer.raft_group.set_priority(1);
-                                // TODO: support witness -> nonwitness conf change
-                                panic!(
-                                    "{} is witness, but the new peer is not witness",
+                                debug!(
+                                    "{} requests snapshot to make the new non-witness peer available",
                                     self.fsm.peer.tag
                                 );
+                                self.fsm.peer.unavailable = true;
+                                self.on_request_snapshot_tick();
                             }
                             _ => {}
                         }
@@ -3719,6 +3737,10 @@ where
                     // Add this peer to peer_heartbeats.
                     self.fsm.peer.peer_heartbeats.insert(peer_id, now);
                     if self.fsm.peer.is_leader() {
+                        if prev_witnesses.contains(&peer_id) && !peer.is_witness {
+                            self.fsm.peer.wait_data_peers.push(peer_id);
+                            self.register_check_peers_availability_tick();
+                        }
                         need_ping = true;
                         self.fsm.peer.peers_start_pending_time.push((peer_id, now));
                         // As `raft_max_inflight_msgs` may have been updated via online config
@@ -3980,6 +4002,7 @@ where
                 self.ctx.raftlog_fetch_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
+                false,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {
@@ -5040,6 +5063,12 @@ where
             return Err(Error::RecoveryInProgress(self.region_id()));
         }
 
+        // Forbid reads and writes when it's just became non-witness but not done apply
+        // snapshot.
+        if self.fsm.peer.wait_data {
+            return Err(Error::RecoveryInProgress(self.region_id()));
+        }
+
         // check whether the peer is initialized.
         if !self.fsm.peer.is_initialized() {
             self.ctx
@@ -5411,6 +5440,20 @@ where
         }
         self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
         self.register_check_long_uncommitted_tick();
+    }
+
+    fn on_request_snapshot_tick(&mut self) {
+        fail_point!("ignore request snapshot", |_| {});
+        assert!(!self.fsm.peer.is_leader());
+        if self
+            .fsm
+            .peer
+            .raft_group
+            .request_snapshot(self.fsm.peer.get_store().first_index())
+            .is_err()
+        {
+            self.schedule_tick(PeerTick::RequestSnapshot);
+        }
     }
 
     fn register_check_leader_lease_tick(&mut self) {

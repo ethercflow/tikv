@@ -10,7 +10,6 @@ use std::{
     mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc::SyncSender,
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -1116,6 +1115,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
+        wait_data: bool,
     ) -> Result<Peer<EK, ER>> {
         let peer_id = peer.get_id();
         if peer_id == raft::INVALID_ID {
@@ -1177,7 +1177,7 @@ where
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
-            wait_data: false,
+            wait_data,
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
@@ -2117,6 +2117,12 @@ where
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
 
+        for peer_id in &self.wait_data_peers {
+            if let Some(p) = self.get_peer_from_cache(*peer_id) {
+                pending_peers.push(p);
+            }
+        }
+
         if status.progress.is_none() {
             return pending_peers;
         }
@@ -2191,6 +2197,9 @@ where
         }
         for i in 0..self.peers_start_pending_time.len() {
             if self.peers_start_pending_time[i].0 != peer_id {
+                continue;
+            }
+            if self.wait_data_peers.contains(&peer_id) {
                 continue;
             }
             let truncated_idx = self.raft_group.store().truncated_index();
@@ -3101,6 +3110,7 @@ where
                 cbs,
                 self.region_buckets.as_ref().map(|b| b.meta.clone()),
                 prev_applying_state,
+                self.wait_data,
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()

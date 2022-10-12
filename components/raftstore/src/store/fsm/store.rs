@@ -559,6 +559,9 @@ where
             self.cfg.check_long_uncommitted_interval.0;
         self.tick_batch[PeerTick::CheckPeersAvailability as usize].wait_duration =
             self.cfg.check_peers_availability_interval.0;
+        // TODO: Is it reasonable to use raft_base_tick_interval
+        self.tick_batch[PeerTick::RequestSnapshot as usize].wait_duration =
+            self.cfg.raft_base_tick_interval.0;
     }
 }
 
@@ -1157,6 +1160,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.raftlog_fetch_scheduler.clone(),
                 self.engines.clone(),
                 region,
+                local_state.get_state() == PeerState::Unavailable,
             ));
             peer.peer.init_replication_mode(&mut replication_state);
             if local_state.get_state() == PeerState::Merging {
@@ -1197,6 +1201,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.raftlog_fetch_scheduler.clone(),
                 self.engines.clone(),
                 &region,
+                false,
             )?;
             peer.peer.init_replication_mode(&mut replication_state);
             peer.schedule_applying_snapshot();
@@ -2824,6 +2829,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.raftlog_fetch_scheduler.clone(),
             self.ctx.engines.clone(),
             &region,
+            false,
         ) {
             Ok((sender, peer)) => (sender, peer),
             Err(e) => {
