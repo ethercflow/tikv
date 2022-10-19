@@ -155,22 +155,39 @@ fn test_non_witness_availability(fp: &str) {
     std::thread::sleep(Duration::from_millis(100));
     must_get_none(&cluster.get_engine(3), b"k1");
 
+    // for i in 0..128_usize {
+    // let x = i.to_be_bytes();
+    // cluster.must_put(&x, &x);
+    // }
+
+    println!("before_region_gen_snap pause");
+    fail::cfg("before_region_gen_snap", "pause").unwrap();
     // witness -> nonwitness
     fail::cfg(fp, "return").unwrap();
     peer_on_store3.set_role(metapb::PeerRole::Learner);
     peer_on_store3.set_is_witness(false);
+    println!("before must_add_peer");
     cluster
         .pd_client
         .must_add_peer(region.get_id(), peer_on_store3.clone());
+    println!("after must_add_peer");
     std::thread::sleep(Duration::from_millis(20));
     // Conf changed, but applying snapshot not yet completed
     must_get_none(&cluster.get_engine(3), b"k1");
     assert_eq!(cluster.pd_client.get_pending_peers().len(), 1);
-    std::thread::sleep(Duration::from_millis(200));
+
+    for i in 0..128_usize {
+        let x = i.to_be_bytes();
+        cluster.must_put(&x, &x);
+    }
+    fail::remove("before_region_gen_snap");
+
+    std::thread::sleep(Duration::from_millis(500));
     // snapshot applied
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     assert_eq!(cluster.pd_client.get_pending_peers().len(), 0);
     fail::remove(fp);
+    println!("after delete region_gen_snap pause");
 }
 
 #[test]
