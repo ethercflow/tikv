@@ -2236,7 +2236,7 @@ where
                         let before_apply_non_witness_conf_change = || {
                             fail_point!(
                                 "before leader apply non-witness conf change",
-                                id == peer.id,
+                                id == 2,
                                 |_| {}
                             );
                         };

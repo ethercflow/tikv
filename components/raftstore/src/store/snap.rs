@@ -575,6 +575,7 @@ impl Snapshot {
     ) -> RaftStoreResult<Self> {
         let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
         s.set_snapshot_meta(snapshot_meta)?;
+        println!("after set_snapshot_meta");
         if s.exists() {
             return Ok(s);
         }
@@ -666,6 +667,10 @@ impl Snapshot {
         let mut file_count = 0;
         let mut current_cf = "";
         info!(
+            "set_snapshot_meta total cf files count: {}",
+            snapshot_meta.get_cf_files().len()
+        );
+        println!(
             "set_snapshot_meta total cf files count: {}",
             snapshot_meta.get_cf_files().len()
         );
@@ -1582,6 +1587,7 @@ impl SnapManager {
     ) -> RaftStoreResult<Box<Snapshot>> {
         let _lock = self.core.registry.rl();
         let base = &self.core.base;
+        println!("in get_snapshot_for_receiving");
         let f = Snapshot::new_for_receiving(base, key, &self.core, snapshot_meta)?;
         Ok(Box::new(f))
     }

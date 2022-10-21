@@ -83,8 +83,15 @@ impl Transport for ChannelTransport {
         let is_snapshot = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
 
         if is_snapshot {
+            println!(
+                "from: {:?}, to: {:?}, to_peer_id: {:?}, region_id: {:?}",
+                from_store, to_store, to_peer_id, region_id
+            );
+
             let snap = msg.get_message().get_snapshot();
+            println!("snap: {:?}", snap);
             let key = SnapKey::from_snap(snap).unwrap();
+            println!("key: {:?}", key);
             let from = match self.core.lock().unwrap().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.register(key.clone(), SnapEntry::Sending);
@@ -92,12 +99,15 @@ impl Transport for ChannelTransport {
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
+            println!("from: {:?}", from);
             let to = match self.core.lock().unwrap().snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.register(key.clone(), SnapEntry::Receiving);
                     let data = msg.get_message().get_snapshot().get_data();
+                    println!("data: {:?}", data);
                     let mut snapshot_data = raft_serverpb::RaftSnapshotData::default();
                     snapshot_data.merge_from_bytes(data).unwrap();
+                    println!("snapshot_data: {:?}", snapshot_data);
                     p.0.get_snapshot_for_receiving(&key, snapshot_data.take_meta())
                         .unwrap()
                 }

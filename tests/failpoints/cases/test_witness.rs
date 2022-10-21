@@ -92,10 +92,8 @@ fn test_request_snapshot_before_leader_finish_apply_conf_change() {
     must_get_none(&cluster.get_engine(3), b"k1");
 
     // witness -> nonwitness
-    let fp1 = "ignore request snapshot";
-    fail::cfg(fp1, "return").unwrap();
-    let fp2 = "before leader apply non-witness conf change";
-    fail::cfg(fp2, "pause").unwrap();
+    let fp = "before leader apply non-witness conf change";
+    fail::cfg(fp, "sleep(100)").unwrap();
     peer_on_store3.set_role(metapb::PeerRole::Learner);
     peer_on_store3.set_is_witness(false);
     cluster
@@ -110,13 +108,7 @@ fn test_request_snapshot_before_leader_finish_apply_conf_change() {
     assert_eq!(cluster.pd_client.get_pending_peers().len(), 1);
     must_get_none(&cluster.get_engine(3), b"k1");
 
-    cluster.stop_node(nodes[2]);
-    fail::remove(fp1);
-    fail::remove(fp2);
-    std::thread::sleep(Duration::from_millis(10));
-    // the PeerState is Unavailable, so it will request snapshot immediately after
-    // start.
-    cluster.run_node(nodes[2]).unwrap();
+    fail::remove(fp);
     std::thread::sleep(Duration::from_millis(200));
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     assert_eq!(cluster.pd_client.get_pending_peers().len(), 0);

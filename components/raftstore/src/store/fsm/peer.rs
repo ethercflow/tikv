@@ -2934,7 +2934,9 @@ where
         &mut self,
         msg: &RaftMessage,
     ) -> Result<Either<Option<SnapKey>, Vec<(u64, bool)>>> {
+        println!("check_snapshot");
         if !msg.get_message().has_snapshot() {
+            println!("check_snapshot return Right");
             return Ok(Either::Right(vec![]));
         }
 
@@ -2959,14 +2961,17 @@ where
         // requests snapshot from leader but leader doesn't applies the switch yet.
         // In that case, the snapshot is a witness snapshot whereas non-witness snapshot
         // is expected.
+        println!("before check_snapshot should return");
         if snap.get_metadata().get_index() < self.fsm.peer.get_store().applied_index()
             && snap_data.get_meta().get_for_witness() != self.fsm.peer.is_witness()
         {
+            println!("check_snapshot should return");
             self.ctx
                 .raft_metrics
                 .message_dropped
                 .mismatch_witness_snapshot
                 .inc();
+            self.schedule_tick(PeerTick::RequestSnapshot);
             return Ok(Either::Left(key));
         }
 
@@ -3698,6 +3703,7 @@ where
                                     self.fsm.peer.tag
                                 );
                                 self.fsm.peer.wait_data = true;
+                                println!("peer_after_update_region, peer id: {:?}", self.fsm.peer.peer.id);
                                 self.on_request_snapshot_tick();
                             }
                             _ => {}
@@ -5444,6 +5450,7 @@ where
     }
 
     fn on_request_snapshot_tick(&mut self) {
+        println!("on_request_snapshot_tick");
         fail_point!("ignore request snapshot", |_| {});
         assert!(!self.fsm.peer.is_leader());
         if self
