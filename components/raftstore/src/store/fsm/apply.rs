@@ -2232,7 +2232,16 @@ where
                     }
 
                     if exist_peer.is_witness && !peer.is_witness {
-                        if self.id() == peer.id {
+                        let id = self.id();
+                        let before_apply_non_witness_conf_change = || {
+                            fail_point!(
+                                "before leader apply non-witness conf change",
+                                id == peer.id,
+                                |_| {}
+                            );
+                        };
+                        before_apply_non_witness_conf_change();
+                        if id == peer.id {
                             self.wait_data = true;
                         }
                         exist_peer.set_is_witness(false);
