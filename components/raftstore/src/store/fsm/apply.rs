@@ -40,7 +40,7 @@ use kvproto::{
     metapb::{self, PeerRole, Region, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-        RaftCmdRequest, RaftCmdResponse, Request, SplitRequest,
+        RaftCmdRequest, RaftCmdResponse, Request, SplitRequest, SwitchWitnessRequest,
     },
     raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState},
 };
@@ -280,6 +280,9 @@ pub enum ExecResult<S> {
     },
     SetFlashbackState {
         region: Region,
+    },
+    BatchSwitchWitness {
+        switch_witnesses: Vec<SwitchWitness>,
     },
 }
 
@@ -954,6 +957,9 @@ where
     /// in same Ready should be applied failed.
     pending_remove: bool,
 
+    /// Indicates whether the peer is waiting data. See more in `Peer`.
+    wait_data: bool,
+
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue<Callback<EK::Snapshot>>,
     /// The counter of pending request snapshots. See more in `Peer`.
@@ -1016,6 +1022,7 @@ where
             peer: find_peer_by_id(&reg.region, reg.id).unwrap().clone(),
             region: reg.region,
             pending_remove: false,
+            wait_data: reg.wait_data,
             last_flush_applied_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
             applied_term: reg.applied_term,
@@ -1509,6 +1516,9 @@ where
                 ExecResult::SetFlashbackState { ref region } => {
                     self.region = region.clone();
                 }
+                ExecResult::BatchSwitchWitness { ref sw } => {
+                    self.switchWitnesses = sw.clone();
+                }
             }
         }
         if let Some(epoch) = origin_epoch {
@@ -1629,6 +1639,7 @@ where
             AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
                 self.exec_flashback(ctx, request)
             }
+            AdminCmdType::BatchSwitchWitness => self.exec_batch_switch_witness(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
         response.set_cmd_type(cmd_type);
@@ -2210,6 +2221,8 @@ where
 
         let state = if self.pending_remove {
             PeerState::Tombstone
+        } else if self.wait_data {
+            PeerState::Unavailable
         } else {
             PeerState::Normal
         };
@@ -3052,6 +3065,58 @@ where
         ))
     }
 
+    fn exec_batch_switch_witness(
+        &mut self,
+        ctx: &mut ApplyContext<EK>,
+        request: &AdminRequest,
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        assert!(request.has_switch_witnesses());
+        let switch_witnesses = request
+            .get_switch_witnesses()
+            .get_switch_witnesses()
+            .to_vec();
+
+        info!(
+            "exec BatchSwitchWitness";
+            "region_id" => self.region_id(),
+            "epoch" => ?self.region.get_region_epoch(),
+        );
+
+        self.apply_batch_switch_witness(switch_witnesses.as_slice());
+
+        let state = if self.pending_remove {
+            PeerState::Tombstone
+        } else if self.wait_data {
+            PeerState::Unavailable
+        } else {
+            PeerState::Normal
+        };
+
+        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &self.region, state, None) {
+            panic!("{} failed to update region state: {:?}", self.tag, e);
+        }
+
+        let resp = AdminResponse::default();
+        Ok((
+            resp,
+            ApplyResult::Res(ExecResult::BatchSwitchWitness { switch_witnesses }),
+        ))
+    }
+
+    fn apply_batch_switch_witness(&mut self, switch_witnesses: &[SwitchWitnessRequest]) {
+        for switch_witness in switch_witnesses {
+            for p in self.region.mut_peers().iter_mut() {
+                if p.id == switch_witness.get_peer_id() {
+                    p.is_witness = switch_witness.get_is_witness();
+                    if !p.is_witness {
+                        self.wait_data = true;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     fn update_memory_trace(&mut self, event: &mut TraceEvent) {
         let pending_cmds = self.pending_cmds.heap_size();
         let merge_yield = if let Some(ref mut state) = self.yield_state {
@@ -3155,6 +3220,7 @@ pub struct Apply<C> {
     pub entries_size: usize,
     pub cbs: Vec<Proposal<C>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
+    pub wait_data: bool,
 }
 
 impl<C: WriteCallback> Apply<C> {
@@ -3167,6 +3233,7 @@ impl<C: WriteCallback> Apply<C> {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<C>>,
         buckets: Option<Arc<BucketMeta>>,
+        wait_data: bool,
     ) -> Apply<C> {
         let mut entries_size = 0;
         for e in &entries {
@@ -3183,6 +3250,7 @@ impl<C: WriteCallback> Apply<C> {
             entries_size,
             cbs,
             bucket_meta: buckets,
+            wait_data,
         }
     }
 
@@ -3237,6 +3305,7 @@ pub struct Registration {
     pub applied_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
+    pub wait_data: bool,
     pub is_merging: bool,
     raft_engine: Box<dyn RaftEngineReadOnly>,
 }
@@ -3250,6 +3319,7 @@ impl Registration {
             applied_term: peer.get_store().applied_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
+            wait_data: peer.wait_data,
             is_merging: peer.pending_merge_state.is_some(),
             raft_engine: Box::new(peer.get_store().engines.raft.clone()),
         }
@@ -3605,6 +3675,8 @@ where
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
+
+        self.delegate.wait_data = apply.wait_data;
 
         let mut entries = Vec::new();
 
@@ -4675,6 +4747,7 @@ mod tests {
                 applied_term: Default::default(),
                 region: Default::default(),
                 pending_request_snapshot_count: Default::default(),
+                wait_data: Default::default(),
                 is_merging: Default::default(),
                 raft_engine: Box::new(PanicEngine),
             }
@@ -4690,6 +4763,7 @@ mod tests {
                 applied_term: self.applied_term,
                 region: self.region.clone(),
                 pending_request_snapshot_count: self.pending_request_snapshot_count.clone(),
+                wait_data: self.wait_data,
                 is_merging: self.is_merging,
                 raft_engine: Box::new(PanicEngine),
             }
@@ -4895,6 +4969,7 @@ mod tests {
             entries,
             cbs,
             None,
+            false,
         )
     }
 

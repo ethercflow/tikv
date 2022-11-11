@@ -32,7 +32,7 @@ use kvproto::{
     pdpb::{self, CheckPolicy},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
-        StatusCmdType, StatusResponse,
+        StatusCmdType, StatusResponse, SwitchWitness,
     },
     raft_serverpb::{
         ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData,
@@ -247,6 +247,7 @@ where
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
+        wait_data: bool,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match find_peer(region, store_id) {
             None => {
@@ -277,6 +278,7 @@ where
                     engines,
                     region,
                     meta_peer,
+                    wait_data,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -331,6 +333,7 @@ where
                     engines,
                     &region,
                     peer,
+                    false,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -1193,6 +1196,7 @@ where
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
             PeerTick::CheckPeersAvailability => self.on_check_peers_availability(),
+            PeerTick::RequestSnapshot => self.on_request_snapshot_tick(),
         }
     }
 
@@ -1203,6 +1207,9 @@ where
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
+        if self.fsm.peer.wait_data {
+            self.on_request_snapshot_tick();
+        }
         // Apply committed entries more quickly.
         // Or if it's a leader. This implicitly means it's a singleton
         // because it becomes leader in `Peer::new` when it's a
@@ -3737,6 +3744,8 @@ where
                             .raft_group
                             .raft
                             .adjust_max_inflight_msgs(peer_id, self.ctx.cfg.raft_max_inflight_msgs);
+                    } else if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.is_witness() {
+                        let _ = self.fsm.peer.get_store().clear_data();
                     }
                 }
                 ConfChangeType::RemoveNode => {
@@ -3998,6 +4007,7 @@ where
                 self.ctx.raftlog_fetch_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
+                false,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {
@@ -4885,6 +4895,7 @@ where
                 ExecResult::SetFlashbackState { region } => {
                     self.on_set_flashback_state(region.get_is_in_flashback())
                 }
+                ExecResult::BatchSwitchWitness { switch_witnesses } => self.on_ready_batch_switch_witness(switch_witnesses),
             }
         }
 
@@ -5048,6 +5059,11 @@ where
         {
             self.ctx.raft_metrics.invalid_proposal.witness.inc();
             // TODO: use a dedicated error type
+            return Err(Error::RecoveryInProgress(self.region_id()));
+        }
+        // Forbid requets when it's just became non-witness but not done apply
+        // snapshot.
+        if self.fsm.peer.wait_data {
             return Err(Error::RecoveryInProgress(self.region_id()));
         }
 
@@ -5427,6 +5443,20 @@ where
         }
         self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
         self.register_check_long_uncommitted_tick();
+    }
+
+    fn on_request_snapshot_tick(&mut self) {
+        fail_point!("ignore request snapshot", |_| {});
+        assert!(!self.fsm.peer.is_leader());
+        if self
+            .fsm
+            .peer
+            .raft_group
+            .request_snapshot(self.fsm.peer.get_store().first_index())
+            .is_err()
+        {
+            self.schedule_tick(PeerTick::RequestSnapshot);
+        }
     }
 
     fn register_check_leader_lease_tick(&mut self) {
@@ -6269,6 +6299,26 @@ where
         self.fsm.peer.is_in_flashback = is_in_flashback;
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();
+    }
+
+    fn on_ready_batch_switch_witness(&mut self, switch_witnesses Vec<SwitchWitness>) {
+        for switch_witness in switch_witnesses {
+            let (peer_id, is_witness) = (switch_witness.get_peer_id(), switch_witness.get_is_witness());
+            if peer_id == self.fsm.peer_id() {
+                if is_witness {
+                    let _ = self.fsm.peer.get_store().clear_data();
+                } else {
+                    self.fsm.peer.wait_data = true;
+                    self.on_request_snapshot_tick();
+                }
+                break;
+            }
+            if self.fsm.peer.is_leader() {
+                self.fsm.peer.wait_data_peers.push(peer_id);
+                self.register_check_peers_availability_tick();
+            }
+        }
+
     }
 
     /// Verify and store the hash to state. return true means the hash has been
