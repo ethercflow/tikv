@@ -205,6 +205,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 tag: format!("[region {}] {}", region_id, peer_id),
                 read_progress: self.read_progress().clone(),
                 pending_remove: false,
+                wait_data: false,
                 bucket_meta: None,
                 txn_extra_op: Default::default(),
                 txn_ext: Default::default(),
