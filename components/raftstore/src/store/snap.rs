@@ -111,6 +111,7 @@ pub fn plain_file_used(cf: &str) -> bool {
 #[inline]
 pub fn check_abort(status: &AtomicUsize) -> Result<()> {
     if status.load(Ordering::Relaxed) == JOB_STATUS_CANCELLING {
+        error!("check_abort return Abort");
         return Err(Error::Abort);
     }
     Ok(())
@@ -1587,15 +1588,20 @@ impl SnapManager {
     }
 
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
+        error!("begin at get_snapshot_for_applying");
         let _lock = self.core.registry.rl();
         let base = &self.core.base;
+        error!("get_snapshot_for_applying before new_for_applying");
         let s = Snapshot::new_for_applying(base, key, &self.core)?;
+        error!("get_snapshot_for_applying after new_for_applying");
         if !s.exists() {
+            error!("get_snapshot_for_applying return err");
             return Err(RaftStoreError::Other(From::from(format!(
                 "snapshot of {:?} not exists.",
                 key
             ))));
         }
+        error!("get_snapshot_for_applying return ok");
         Ok(Box::new(s))
     }
 

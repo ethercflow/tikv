@@ -176,6 +176,7 @@ fn test_witness_conf_change() {
 #[test]
 fn test_witness_switch_witness() {
     let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(3600);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);

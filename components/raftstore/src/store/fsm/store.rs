@@ -47,7 +47,7 @@ use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_try,
-    config::{Tracker, VersionTrack},
+    config::{ReadableDuration, Tracker, VersionTrack},
     debug, defer, error,
     future::poll_future_notify,
     info, is_zero_duration,
@@ -563,7 +563,8 @@ where
             self.cfg.check_peers_availability_interval.0;
         // TODO: Is it reasonable to use pd_heartbeat_tick_interval?
         self.tick_batch[PeerTick::RequestSnapshot as usize].wait_duration =
-            self.cfg.pd_heartbeat_tick_interval.0;
+            ReadableDuration::minutes(100).0;
+        //   self.cfg.pd_heartbeat_tick_interval.0 * 10;
     }
 }
 

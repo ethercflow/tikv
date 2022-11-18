@@ -2491,7 +2491,10 @@ where
     /// - Wait for applying snapshot to complete(`check_snap_status`)
     /// Then it's valid to handle the next ready.
     fn check_snap_status<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
-        error!("check_snap_status, wait_data: {:?}", self.wait_data);
+        error!(
+            "check_snap_status, wait_data: {:?}, peer: {:?}",
+            self.wait_data, self.peer,
+        );
         if let Some(snap_ctx) = self.apply_snap_ctx.as_ref() {
             if !snap_ctx.scheduled {
                 // There is a snapshot from ready but it is not scheduled because the ready has

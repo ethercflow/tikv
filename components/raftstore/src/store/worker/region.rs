@@ -455,15 +455,19 @@ where
 
         // apply snapshot
         let apply_state = self.apply_state(region_id)?;
+        info!("begin apply snap data get apply state"; "region_id" => region_id, "peer_id" => peer_id);
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
+        info!("begin apply snap data after snap_key"; "region_id" => region_id, "peer_id" => peer_id);
         self.mgr.register(snap_key.clone(), SnapEntry::Applying);
+        info!("begin apply snap data after register snapshot"; "region_id" => region_id, "peer_id" => peer_id);
         defer!({
             self.mgr.deregister(&snap_key, &SnapEntry::Applying);
         });
         let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
         if !s.exists() {
+            info!("begin apply snap data missing snapshot file"; "region_id" => region_id, "peer_id" => peer_id);
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
         info!("begin apply snap data get snapshot file"; "region_id" => region_id, "peer_id" => peer_id);
