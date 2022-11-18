@@ -17,13 +17,13 @@ fn become_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut m
 }
 
 fn become_non_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut metapb::Peer) {
-    peer.set_role(metapb::PeerRole::Learner);
-    cluster.pd_client.must_add_peer(region_id, peer.clone());
+    // peer.set_role(metapb::PeerRole::Learner);
+    //   cluster.pd_client.must_add_peer(region_id, peer.clone());
     cluster
         .pd_client
         .must_switch_witnesses(region_id, vec![peer.get_id()], vec![false]);
-    peer.set_role(metapb::PeerRole::Voter);
-    cluster.pd_client.must_add_peer(region_id, peer.clone());
+    //   peer.set_role(metapb::PeerRole::Voter);
+    //  cluster.pd_client.must_add_peer(region_id, peer.clone());
 }
 
 // Test the case that region split or merge with witness peer
@@ -196,10 +196,10 @@ fn test_witness_switch_witness() {
     std::thread::sleep(Duration::from_millis(100));
     must_get_none(&cluster.get_engine(3), b"k1");
 
-    // become_non_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    become_non_witness(&cluster, region.get_id(), &mut peer_on_store3);
 
-    // std::thread::sleep(Duration::from_millis(100));
-    // must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    std::thread::sleep(Duration::from_millis(100));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 }
 
 // TODO: add back when switch witness is supported

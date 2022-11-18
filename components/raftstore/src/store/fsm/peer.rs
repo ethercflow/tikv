@@ -2256,6 +2256,9 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "res" => ?res,
                 );
+                if self.fsm.peer.wait_data {
+                    return;
+                }
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
                 if self.fsm.stopped {
                     return;
@@ -5478,6 +5481,7 @@ where
                 "err" => %e,
             );
         }
+        error!("pass request snapshot");
         // Requesting a snapshot may fail, so register a periodic event as a defense
         // until succeeded.
         self.schedule_tick(PeerTick::RequestSnapshot);

@@ -451,6 +451,8 @@ where
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
+        info!("begin apply snap data before apply snapshot"; "region_id" => region_id, "peer_id" => peer_id);
+
         // apply snapshot
         let apply_state = self.apply_state(region_id)?;
         let term = apply_state.get_truncated_state().get_term();
@@ -464,6 +466,7 @@ where
         if !s.exists() {
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
+        info!("begin apply snap data get snapshot file"; "region_id" => region_id, "peer_id" => peer_id);
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
@@ -473,7 +476,9 @@ where
             write_batch_size: self.batch_size,
             coprocessor_host: self.coprocessor_host.clone(),
         };
+        info!("begin apply snap data before apply"; "region_id" => region_id, "peer_id" => peer_id);
         s.apply(options)?;
+        info!("begin apply snap data after apply"; "region_id" => region_id, "peer_id" => peer_id);
         self.coprocessor_host
             .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s));
 
