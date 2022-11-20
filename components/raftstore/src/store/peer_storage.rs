@@ -13,7 +13,9 @@ use std::{
     u64,
 };
 
-use engine_traits::{Engines, KvEngine, Mutable, Peekable, RaftEngine, RaftLogBatch, CF_RAFT};
+use engine_traits::{
+    Engines, KvEngine, Mutable, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, CF_RAFT,
+};
 use fail::fail_point;
 use into_other::into_other;
 use keys::{self, enc_end_key, enc_start_key};
@@ -664,6 +666,7 @@ where
             "peer_id" => self.peer_id,
             "region" => ?region,
             "state" => ?self.apply_state(),
+            "for_witness" => for_witness,
         );
 
         Ok((region, for_witness))
@@ -933,6 +936,7 @@ where
                 ready.snapshot().get_metadata().get_index(),
                 write_task.extra_write.v1_mut().unwrap(),
             )?;
+            error!("will save_apply_state_to, peer: {:?}", self.peer_id);
             self.save_apply_state_to(write_task.extra_write.v1_mut().unwrap())?;
         }
 
@@ -976,6 +980,11 @@ where
                 );
             }
         }
+
+        error!(
+            "before schedule applying snapshot, apply_state: {:?}",
+            self.apply_state()
+        );
 
         if !res.for_witness {
             self.schedule_applying_snapshot();

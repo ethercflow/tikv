@@ -2915,6 +2915,10 @@ where
                 // up. This is a best effort, if TiKV is shutdown before the task is
                 // handled, there can still be stale logs not being deleted until next
                 // log gc command is executed. This will delete range [0, last_first_index).
+                error!(
+                    "last_compacted_idx: {:?}, last_first_index: {:?}",
+                    self.last_compacted_idx, last_first_index
+                );
                 self.schedule_raftlog_gc(ctx, last_first_index);
                 self.last_compacted_idx = last_first_index;
             }
@@ -3109,6 +3113,8 @@ where
             );
         }
 
+        error!("on_persist_snapshot, peer_id: {:?}", self.peer.get_id());
+
         let persist_res = snap_ctx.persist_res.take().unwrap();
         // Schedule snapshot to apply
         snap_ctx.scheduled = true;
@@ -3200,6 +3206,10 @@ where
         }
 
         if self.apply_snap_ctx.is_some() && self.unpersisted_readies.is_empty() {
+            error!(
+                "on_persist_ready, will persist_snapshot, peer id: {:?}",
+                self.peer.get_id()
+            );
             // Since the snapshot must belong to the last ready, so if `unpersisted_readies`
             // is empty, it means this persisted number is the last one.
             Some(self.on_persist_snapshot(ctx, number))

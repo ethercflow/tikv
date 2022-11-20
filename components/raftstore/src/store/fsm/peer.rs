@@ -49,6 +49,7 @@ use raft::{
     GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use smallvec::SmallVec;
+use tidb_query_datatype::codec::data_type::ChunkedVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, debug, defer, error, escape, info, is_zero_duration,
@@ -677,7 +678,10 @@ where
                 PeerMsg::Persisted {
                     peer_id,
                     ready_number,
-                } => self.on_persisted_msg(peer_id, ready_number),
+                } => {
+                    error!("PeerMsg::Persisted");
+                    self.on_persisted_msg(peer_id, ready_number);
+                }
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
                 PeerMsg::Destroy(peer_id) => {
                     if self.fsm.peer.peer_id() == peer_id {
@@ -1862,6 +1866,10 @@ where
     }
 
     fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64) {
+        error!(
+            "on_persisted_msg, peer_id: {:?}, ready_number: {:?}",
+            peer_id, ready_number
+        );
         if peer_id != self.fsm.peer_id() {
             error!(
                 "peer id not match";
@@ -1893,6 +1901,10 @@ where
     }
 
     pub fn post_raft_ready_append(&mut self) {
+        error!(
+            "post_raft_ready_append, peer_id: {:?}",
+            self.fsm.peer.peer.get_id()
+        );
         if let Some(persist_snap_res) = self.fsm.peer.handle_raft_ready_advance(self.ctx) {
             self.on_ready_persist_snapshot(persist_snap_res);
             if self.fsm.peer.pending_merge_state.is_some() {
@@ -2171,6 +2183,12 @@ where
             return;
         }
 
+        // Keep ticking if is waiting for snapshot.
+        if self.fsm.peer.wait_data {
+            self.register_raft_base_tick();
+            return;
+        }
+
         debug!("stop ticking"; "res" => ?res,
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
@@ -2256,15 +2274,15 @@ where
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
+                if self.fsm.peer.wait_data {
+                    return;
+                }
                 debug!(
                     "async apply finish";
                     "region_id" => self.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "res" => ?res,
                 );
-                if self.fsm.peer.wait_data {
-                    return;
-                }
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
                 if self.fsm.stopped {
                     return;
@@ -2616,6 +2634,7 @@ where
     fn on_hibernate_request(&mut self, from: &metapb::Peer) {
         if !self.ctx.cfg.hibernate_regions
             || self.fsm.peer.has_uncommitted_log()
+            || self.fsm.peer.wait_data
             || from.get_id() != self.fsm.peer.leader_id()
         {
             // Ignore the message means rejecting implicitly.
@@ -5487,7 +5506,10 @@ where
                 "err" => %e,
             );
         }
-        error!("pass request snapshot");
+        error!(
+            "pass request snapshot, first index: {:?}",
+            self.fsm.peer.get_store().first_index()
+        );
         // Requesting a snapshot may fail, so register a periodic event as a defense
         // until succeeded.
         self.schedule_tick(PeerTick::RequestSnapshot);
@@ -6543,6 +6565,7 @@ fn new_compact_log_request(
     admin.mut_compact_log().set_compact_index(compact_index);
     admin.mut_compact_log().set_compact_term(compact_term);
     request.set_admin_request(admin);
+    error!("AdminCmdType::CompactLog, req: {:?}", request);
     request
 }
 

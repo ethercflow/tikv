@@ -512,6 +512,11 @@ where
     /// `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
         if delegate.last_flush_applied_index < delegate.apply_state.get_applied_index() {
+            error!(
+                "last_flush_applied_index: {:?},delegate.apply_state.get_applied_index(): {:?}",
+                delegate.last_flush_applied_index,
+                delegate.apply_state.get_applied_index()
+            );
             delegate.maybe_write_apply_state(self);
         }
         self.commit_opt(delegate, true);
@@ -633,6 +638,7 @@ where
     ) {
         if self.host.pre_persist(&delegate.region, true, None) {
             if !delegate.pending_remove {
+                error!("finish_for before maybe, results: {:?}", results);
                 delegate.maybe_write_apply_state(self);
             }
             self.commit_opt(delegate, false);
@@ -1108,6 +1114,7 @@ where
                 ApplyResult::None => {}
                 ApplyResult::Res(res) => results.push_back(res),
                 ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
+                    error!("ApplyResult::Yield | ApplyResult::WaitMergeSource");
                     // Both cancel and merge will yield current processing.
                     apply_ctx.committed_count -= committed_entries_drainer.len() + 1;
                     let mut pending_entries =
@@ -1115,7 +1122,14 @@ where
                     // Note that current entry is skipped when yield.
                     pending_entries.push(entry);
                     pending_entries.extend(committed_entries_drainer);
-                    apply_ctx.finish_for(self, results);
+                    if !self.wait_data || !results.is_empty() {
+                        error!(
+                            "wait_data: {:?}, results.is_empty(): {:?}",
+                            self.wait_data,
+                            results.is_empty()
+                        );
+                        apply_ctx.finish_for(self, results);
+                    }
                     self.yield_state = Some(YieldState {
                         pending_entries,
                         pending_msgs: Vec::default(),
@@ -1128,6 +1142,7 @@ where
                 }
             }
         }
+        error!("cannot here");
         apply_ctx.finish_for(self, results);
 
         if self.pending_remove {
@@ -1152,11 +1167,17 @@ where
                 self.tag, e
             );
         });
+        error!(
+            "write_apply_state: {:?}, peer: {:?}",
+            self.apply_state,
+            self.id()
+        );
     }
 
     fn maybe_write_apply_state(&self, apply_ctx: &mut ApplyContext<EK>) {
         let can_write = apply_ctx.host.pre_write_apply_state(&self.region);
         if can_write {
+            error!("can_write, peer: {:?}", self.id());
             self.write_apply_state(apply_ctx.kv_wb_mut());
         }
     }
@@ -1365,6 +1386,7 @@ where
             .applied_batch
             .push(cmd_cb, cmd, &self.observe_info, self.region_id());
         if should_write {
+            error!("should_write is true");
             // An observer shall prevent a write_apply_state here by not return true
             // when `post_exec`.
             self.write_apply_state(apply_ctx.kv_wb_mut());
