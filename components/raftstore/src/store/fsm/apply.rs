@@ -235,6 +235,7 @@ impl Range {
 
 #[derive(Default, Debug)]
 pub struct SwitchWitness {
+    pub index: u64,
     pub switches: Vec<SwitchWitnessRequest>,
     pub region: Region,
 }
@@ -3146,6 +3147,7 @@ where
         Ok((
             resp,
             ApplyResult::Res(ExecResult::BatchSwitchWitness(SwitchWitness {
+                index: ctx.exec_log_index,
                 switches,
                 region,
             })),
