@@ -564,6 +564,9 @@ where
         // TODO: Is it reasonable to use pd_heartbeat_tick_interval?
         self.tick_batch[PeerTick::RequestSnapshot as usize].wait_duration =
             self.cfg.pd_heartbeat_tick_interval.0;
+        // TODO: make it reasonable
+        self.tick_batch[PeerTick::RequestVoterReplicatedIndex as usize].wait_duration =
+            self.cfg.raft_log_gc_tick_interval.0 * 2;
     }
 }
 
