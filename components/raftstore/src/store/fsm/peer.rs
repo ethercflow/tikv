@@ -2319,21 +2319,6 @@ where
                     *is_ready = true;
                 }
             }
-            ApplyTaskRes::Compact {
-                state,
-                first_index,
-                has_pending,
-            } => {
-                self.fsm.peer.has_pending_compact_cmd = has_pending;
-                // When the witness restarts, the pending compact cmds will be lost. We will try
-                // to use `voter_replicated_index` as the `compact index` to avoid log
-                // accumulation, but if `voter_replicated_index` is less than `first_index`,
-                // then gc is not needed. In this case, the `first_index` we pass back will be
-                // 0, and `has_pending` set to false.
-                if first_index != 0 {
-                    self.on_ready_compact_log(first_index, state);
-                }
-            }
         }
         if self.fsm.peer.unsafe_recovery_state.is_some() {
             self.check_unsafe_recovery_state();
@@ -4950,8 +4935,20 @@ where
         while let Some(result) = exec_results.pop_front() {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(cp),
-                ExecResult::CompactLog { first_index, state } => {
-                    self.on_ready_compact_log(first_index, state)
+                ExecResult::CompactLog {
+                    state,
+                    first_index,
+                    has_pending,
+                } => {
+                    self.fsm.peer.has_pending_compact_cmd = has_pending;
+                    // When the witness restarts, the pending compact cmds will be lost. We will try
+                    // to use `voter_replicated_index` as the `compact index` to avoid log
+                    // accumulation, but if `voter_replicated_index` is less than `first_index`,
+                    // then gc is not needed. In this case, the `first_index` we pass back will be
+                    // 0, and `has_pending` set to false.
+                    if first_index != 0 {
+                        self.on_ready_compact_log(first_index, state);
+                    }
                 }
                 ExecResult::SplitRegion {
                     derived,

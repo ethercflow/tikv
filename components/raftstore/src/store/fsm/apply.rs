@@ -265,6 +265,7 @@ pub enum ExecResult<S> {
     CompactLog {
         state: RaftTruncatedState,
         first_index: u64,
+        has_pending: bool,
     },
     SplitRegion {
         regions: Vec<Region>,
@@ -2995,7 +2996,7 @@ where
         &mut self,
         voter_replicated_index: u64,
         voter_replicated_term: u64,
-    ) -> Result<Option<TaskRes<EK::Snapshot>>> {
+    ) -> Result<(bool, Option<ApplyResult<EK::Snapshot>>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
         let first_index = entry_storage::first_index(&self.apply_state);
 
@@ -3006,7 +3007,7 @@ where
                 "peer_id" => self.id(),
                 "voter_replicated_index" => voter_replicated_index,
             );
-            return Ok(None);
+            return Ok((false, None));
         }
 
         // When the witness restarted, the pending compact cmd has been lost, so use
@@ -3020,11 +3021,14 @@ where
                     "compact_index" => voter_replicated_index,
                     "first_index" => first_index,
                 );
-                return Ok(Some(TaskRes::Compact {
-                    state: self.apply_state.get_truncated_state().clone(),
-                    first_index: 0,
-                    has_pending: false,
-                }));
+                return Ok((
+                    false,
+                    Some(ApplyResult::Res(ExecResult::CompactLog {
+                        state: self.apply_state.get_truncated_state().clone(),
+                        first_index: 0,
+                        has_pending: false,
+                    })),
+                ));
             }
             // compact failure is safe to be omitted, no need to assert.
             compact_raft_log(
@@ -3034,11 +3038,14 @@ where
                 voter_replicated_term,
             )?;
             PEER_ADMIN_CMD_COUNTER.compact.success.inc();
-            return Ok(Some(TaskRes::Compact {
-                state: self.apply_state.get_truncated_state().clone(),
-                first_index,
-                has_pending: false,
-            }));
+            return Ok((
+                true,
+                (Some(ApplyResult::Res(ExecResult::CompactLog {
+                    state: self.apply_state.get_truncated_state().clone(),
+                    first_index,
+                    has_pending: false,
+                }))),
+            ));
         }
 
         match self.pending_cmds.pop_compact(voter_replicated_index) {
@@ -3046,11 +3053,14 @@ where
                 // compact failure is safe to be omitted, no need to assert.
                 compact_raft_log(&self.tag, &mut self.apply_state, cmd.index, cmd.term)?;
                 PEER_ADMIN_CMD_COUNTER.compact.success.inc();
-                Ok(Some(TaskRes::Compact {
-                    state: self.apply_state.get_truncated_state().clone(),
-                    first_index,
-                    has_pending: self.pending_cmds.has_compact(),
-                }))
+                Ok((
+                    true,
+                    Some(ApplyResult::Res(ExecResult::CompactLog {
+                        state: self.apply_state.get_truncated_state().clone(),
+                        first_index,
+                        has_pending: self.pending_cmds.has_compact(),
+                    })),
+                ))
             }
             None => {
                 info!(
@@ -3059,7 +3069,7 @@ where
                     "peer_id" => self.id(),
                     "voter_replicated_index" => voter_replicated_index,
                 );
-                Ok(None)
+                Ok((false, None))
             }
         }
     }
@@ -3158,6 +3168,7 @@ where
             ApplyResult::Res(ExecResult::CompactLog {
                 state: self.apply_state.get_truncated_state().clone(),
                 first_index,
+                has_pending: self.pending_cmds.has_compact(),
             }),
         ))
     }
@@ -3806,11 +3817,6 @@ where
         // Whether destroy request is from its target region's snapshot
         merge_from_snapshot: bool,
     },
-    Compact {
-        state: RaftTruncatedState,
-        first_index: u64,
-        has_pending: bool,
-    },
 }
 
 pub struct ApplyFsm<EK>
@@ -4227,18 +4233,32 @@ where
         voter_replicated_index: u64,
         voter_replicated_term: u64,
     ) {
+        if self.delegate.pending_remove || self.delegate.stopped {
+            return;
+        }
+
+        if self.delegate.wait_data {
+            return;
+        }
+
         let res = self
             .delegate
             .try_compact_log(voter_replicated_index, voter_replicated_term);
         match res {
-            Ok(res) => {
+            Ok((should_write, res)) => {
                 if let Some(res) = res {
                     ctx.prepare_for(&mut self.delegate);
-                    self.delegate.write_apply_state(ctx.kv_wb_mut());
-                    ctx.commit_opt(&mut self.delegate, true);
-                    ctx.finish_for(&mut self.delegate, VecDeque::new());
-                    ctx.notifier
-                        .notify_one(self.delegate.region_id(), PeerMsg::ApplyRes { res });
+                    let mut result = VecDeque::new();
+                    // If modified `truncated_state` in `try_compact_log`, the apply state should be
+                    // persisted.
+                    if should_write {
+                        self.delegate.write_apply_state(ctx.kv_wb_mut());
+                        ctx.commit(&mut self.delegate);
+                        if let ApplyResult::Res(res) = res {
+                            result.push_back(res);
+                        }
+                    }
+                    ctx.finish_for(&mut self.delegate, result);
                 }
             }
             Err(e) => error!(?e;
@@ -4308,7 +4328,12 @@ where
                         batch_apply = Some(apply);
                     }
                 }
-                Msg::Recover(..) => self.delegate.wait_data = false,
+                Msg::Recover(..) => {
+                    self.delegate.wait_data = false;
+                    for mut cmd in self.delegate.pending_cmds.compacts.drain(..) {
+                        cmd.cb.take().unwrap();
+                    }
+                }
                 Msg::Registration(reg) => self.handle_registration(reg),
                 Msg::Destroy(d) => self.handle_destroy(apply_ctx, d),
                 Msg::LogsUpToDate(cul) => self.logs_up_to_date_for_merge(apply_ctx, cul),
