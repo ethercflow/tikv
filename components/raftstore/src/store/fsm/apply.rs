@@ -1254,6 +1254,16 @@ where
             }
         }
 
+        if self.peer.is_witness || self.wait_data {
+            error!(
+               "handle_raft_entry_normal after empty cmd, set";
+               "applied_index" => index,
+               "region_id" => self.region_id(),
+               "peer_id" => self.id(),
+               "is_witness" => self.peer.is_witness,
+               "wait_data" => self.wait_data,
+            );
+        }
         self.apply_state.set_applied_index(index);
         self.applied_term = term;
         assert!(term > 0);
@@ -1467,6 +1477,16 @@ where
             return (cmd, exec_result, false);
         }
 
+        if self.peer.is_witness || self.wait_data {
+            error!(
+               "apply_raft_cmd";
+               "applied_index" => index,
+               "region_id" => self.region_id(),
+               "peer_id" => self.id(),
+               "is_witness" => self.peer.is_witness,
+               "wait_data" => self.wait_data,
+            );
+        }
         self.apply_state.set_applied_index(index);
         self.applied_term = term;
 
@@ -4258,6 +4278,31 @@ where
                             result.push_back(res);
                         }
                     }
+                    if !ctx.apply_res.is_empty() {
+                        if let Some(last) = ctx.apply_res.last() {
+                            if last.apply_state.clone().get_applied_index()
+                                != self.delegate.apply_state.get_applied_index()
+                            {
+                                error!(
+                                    "check_pending_compact_log";
+                                    "last.apply_state.clone().get_applied_index()" => last.apply_state.clone().get_applied_index(),
+                                    "self.delegate.apply_state.get_applied_index()" => self.delegate.apply_state.get_applied_index(),
+                                    "region_id" => self.delegate.region_id(),
+                                    "peer_id" => self.delegate.id(),
+                                    "is_witness" => self.delegate.peer.is_witness,
+                                    "wait_data" => self.delegate.wait_data,
+                                );
+                            }
+                        }
+                    }
+                    error!(
+                        "check_pending_compact_log";
+                        "self.delegate.apply_state.get_applied_index()" => self.delegate.apply_state.get_applied_index(),
+                        "region_id" => self.delegate.region_id(),
+                        "peer_id" => self.delegate.id(),
+                        "is_witness" => self.delegate.peer.is_witness,
+                        "wait_data" => self.delegate.wait_data,
+                    );
                     ctx.finish_for(&mut self.delegate, result);
                 }
             }

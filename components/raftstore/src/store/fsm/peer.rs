@@ -2271,6 +2271,15 @@ where
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
+                if self.fsm.peer.peer.is_witness || self.fsm.peer.wait_data {
+                    error!("on_apply_res";
+                        "applied_index" => applied_index,
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer.peer.id,
+                        "is_witness" => self.fsm.peer.peer.is_witness,
+                        "wait_data" => self.fsm.peer.wait_data,
+                    );
+                }
                 let buckets = self.fsm.peer.region_buckets.as_mut();
                 if let (Some(delta), Some(buckets)) = (res.bucket_stat, buckets) {
                     merge_bucket_stats(
