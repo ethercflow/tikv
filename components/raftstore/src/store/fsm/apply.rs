@@ -715,6 +715,7 @@ where
 
         if !self.apply_res.is_empty() {
             fail_point!("before_nofity_apply_res");
+            error!("end flush"; "apply_res's len" => self.apply_res.len());
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
@@ -1262,6 +1263,7 @@ where
                "peer_id" => self.id(),
                "is_witness" => self.peer.is_witness,
                "wait_data" => self.wait_data,
+               "apply_res's len" => apply_ctx.apply_res.len(),
             );
         }
         self.apply_state.set_applied_index(index);
@@ -4303,14 +4305,24 @@ where
                             }
                         }
                     }
-                    ctx.finish_for(&mut self.delegate, result);
                     error!(
-                        "check_pending_compact_log";
+                        "check_pending_compact_log before finish for";
                         "self.delegate.apply_state.get_applied_index()" => self.delegate.apply_state.get_applied_index(),
                         "region_id" => self.delegate.region_id(),
                         "peer_id" => self.delegate.id(),
                         "is_witness" => self.delegate.peer.is_witness,
                         "wait_data" => self.delegate.wait_data,
+                        "apply_res's len" => ctx.apply_res.len(),
+                    );
+                    ctx.finish_for(&mut self.delegate, result);
+                    error!(
+                        "check_pending_compact_log after finish for";
+                        "self.delegate.apply_state.get_applied_index()" => self.delegate.apply_state.get_applied_index(),
+                        "region_id" => self.delegate.region_id(),
+                        "peer_id" => self.delegate.id(),
+                        "is_witness" => self.delegate.peer.is_witness,
+                        "wait_data" => self.delegate.wait_data,
+                        "apply_res's len" => ctx.apply_res.len(),
                     );
                 }
             }
