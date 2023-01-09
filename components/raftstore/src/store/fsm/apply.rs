@@ -3016,7 +3016,7 @@ where
         &mut self,
         voter_replicated_index: u64,
         voter_replicated_term: u64,
-    ) -> Result<(bool, Option<ApplyResult<EK::Snapshot>>)> {
+    ) -> Result<(bool, Option<ExecResult<EK::Snapshot>>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
         let first_index = entry_storage::first_index(&self.apply_state);
 
@@ -3043,11 +3043,11 @@ where
                 );
                 return Ok((
                     false,
-                    Some(ApplyResult::Res(ExecResult::CompactLog {
+                    Some(ExecResult::CompactLog {
                         state: self.apply_state.get_truncated_state().clone(),
                         first_index: 0,
                         has_pending: false,
-                    })),
+                    }),
                 ));
             }
             // compact failure is safe to be omitted, no need to assert.
@@ -3060,11 +3060,11 @@ where
             PEER_ADMIN_CMD_COUNTER.compact.success.inc();
             return Ok((
                 true,
-                (Some(ApplyResult::Res(ExecResult::CompactLog {
+                (Some(ExecResult::CompactLog {
                     state: self.apply_state.get_truncated_state().clone(),
                     first_index,
                     has_pending: false,
-                }))),
+                })),
             ));
         }
 
@@ -3075,11 +3075,11 @@ where
                 PEER_ADMIN_CMD_COUNTER.compact.success.inc();
                 Ok((
                     true,
-                    Some(ApplyResult::Res(ExecResult::CompactLog {
+                    Some(ExecResult::CompactLog {
                         state: self.apply_state.get_truncated_state().clone(),
                         first_index,
                         has_pending: self.pending_cmds.has_compact(),
-                    })),
+                    }),
                 ))
             }
             None => {
@@ -4274,27 +4274,36 @@ where
                     if should_write {
                         self.delegate.write_apply_state(ctx.kv_wb_mut());
                         ctx.commit(&mut self.delegate);
-                        if let ApplyResult::Res(res) = res {
-                            result.push_back(res);
-                        }
                     }
+                    result.push_back(res);
                     if !ctx.apply_res.is_empty() {
                         if let Some(last) = ctx.apply_res.last() {
-                            if last.apply_state.clone().get_applied_index()
+                            if last.apply_state.get_applied_index()
                                 != self.delegate.apply_state.get_applied_index()
                             {
                                 error!(
-                                    "check_pending_compact_log";
-                                    "last.apply_state.clone().get_applied_index()" => last.apply_state.clone().get_applied_index(),
+                                    "check_pending_compact_log not equal";
+                                    "last.apply_state.get_applied_index()" => last.apply_state.get_applied_index(),
                                     "self.delegate.apply_state.get_applied_index()" => self.delegate.apply_state.get_applied_index(),
                                     "region_id" => self.delegate.region_id(),
                                     "peer_id" => self.delegate.id(),
                                     "is_witness" => self.delegate.peer.is_witness,
                                     "wait_data" => self.delegate.wait_data,
                                 );
+                            } else {
+                                error!(
+                                        "check_pending_compact_log equal";
+                                        "last.apply_state.get_applied_index()" => last.apply_state.get_applied_index(),
+                                        "self.delegate.apply_state.get_applied_index()" => self.delegate.apply_state.get_applied_index(),
+                                        "region_id" => self.delegate.region_id(),
+                                        "peer_id" => self.delegate.id(),
+                                        "is_witness" => self.delegate.peer.is_witness,
+                                        "wait_data" => self.delegate.wait_data,
+                                );
                             }
                         }
                     }
+                    ctx.finish_for(&mut self.delegate, result);
                     error!(
                         "check_pending_compact_log";
                         "self.delegate.apply_state.get_applied_index()" => self.delegate.apply_state.get_applied_index(),
@@ -4303,7 +4312,6 @@ where
                         "is_witness" => self.delegate.peer.is_witness,
                         "wait_data" => self.delegate.wait_data,
                     );
-                    ctx.finish_for(&mut self.delegate, result);
                 }
             }
             Err(e) => error!(?e;
