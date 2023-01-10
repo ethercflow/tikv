@@ -1258,6 +1258,7 @@ where
         if self.peer.is_witness || self.wait_data {
             error!(
                "handle_raft_entry_normal after empty cmd, set";
+               "thread_name" => std::thread::current().name().unwrap(),
                "applied_index" => index,
                "region_id" => self.region_id(),
                "peer_id" => self.id(),
@@ -4308,6 +4309,7 @@ where
                     error!(
                         "check_pending_compact_log before finish for";
                         "self.delegate.apply_state.get_applied_index()" => self.delegate.apply_state.get_applied_index(),
+                        "thread_name" => std::thread::current().name().unwrap(),
                         "region_id" => self.delegate.region_id(),
                         "peer_id" => self.delegate.id(),
                         "is_witness" => self.delegate.peer.is_witness,
@@ -4318,6 +4320,7 @@ where
                     error!(
                         "check_pending_compact_log after finish for";
                         "self.delegate.apply_state.get_applied_index()" => self.delegate.apply_state.get_applied_index(),
+                        "thread_name" => std::thread::current().name().unwrap(),
                         "region_id" => self.delegate.region_id(),
                         "peer_id" => self.delegate.id(),
                         "is_witness" => self.delegate.peer.is_witness,
