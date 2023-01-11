@@ -51,7 +51,9 @@ use raft::{
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, debug, defer, error, escape, info, is_zero_duration,
+    box_err,
+    config::ReadableDuration,
+    debug, defer, error, escape, info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
@@ -5598,9 +5600,7 @@ where
             return;
         }
         // TODO: make it configurable
-        if self.fsm.peer.last_compacted_time.elapsed()
-            > self.ctx.cfg.raft_log_gc_tick_interval.0 * 2
-        {
+        if self.fsm.peer.last_compacted_time.elapsed() > Duration::from_secs(1800) {
             let mut msg = ExtraMessage::default();
             msg.set_type(ExtraMessageType::MsgVoterReplicatedIndexRequest);
             let leader_id = self.fsm.peer.leader_id();
