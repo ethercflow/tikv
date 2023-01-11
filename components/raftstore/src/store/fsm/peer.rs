@@ -5125,6 +5125,7 @@ where
                 && (msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer
                     || msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeerV2))
             {
+                error!("in force leader state, forbid requests to make the recovery progress less error-prone");
                 return Err(Error::RecoveryInProgress(self.region_id()));
             }
         }
@@ -5160,6 +5161,7 @@ where
                 && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)
         {
             self.ctx.raft_metrics.invalid_proposal.witness.inc();
+            error!("Forbid requests when it's a Error_IsWitness unless it's transfer leader");
             return Err(Error::IsWitness(self.region_id()));
         }
 
@@ -5175,6 +5177,7 @@ where
                 .any(|s| s.get_peer_id() == self.fsm.peer.peer.get_id() && s.get_is_witness())
         {
             self.ctx.raft_metrics.invalid_proposal.witness.inc();
+            error!("Forbid requests to switch it into a witness Error_IsWitness when it's a leader");
             return Err(Error::IsWitness(self.region_id()));
         }
 
@@ -5182,6 +5185,7 @@ where
         // snapshot.
         if self.fsm.peer.wait_data {
             self.ctx.raft_metrics.invalid_proposal.non_witness.inc();
+            error!("Forbid requests Error_IsWitness when it becomes to non-witness but not finish applying snapshot.");
             return Err(Error::IsWitness(self.region_id()));
         }
 

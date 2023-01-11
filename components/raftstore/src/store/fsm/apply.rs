@@ -715,7 +715,10 @@ where
 
         if !self.apply_res.is_empty() {
             fail_point!("before_nofity_apply_res");
-            error!("end flush"; "apply_res's len" => self.apply_res.len());
+            error!("end flush"; 
+                   "apply_res's len" => self.apply_res.len(),
+                   "thread_name" => std::thread::current().name().unwrap(),
+                   );
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
@@ -1267,6 +1270,7 @@ where
                "apply_res's len" => apply_ctx.apply_res.len(),
             );
         }
+
         self.apply_state.set_applied_index(index);
         self.applied_term = term;
         assert!(term > 0);
@@ -1484,6 +1488,7 @@ where
             error!(
                "apply_raft_cmd";
                "applied_index" => index,
+               "thread_name" => std::thread::current().name().unwrap(),
                "region_id" => self.region_id(),
                "peer_id" => self.id(),
                "is_witness" => self.peer.is_witness,
@@ -1689,6 +1694,7 @@ where
         if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
             info!(
                 "execute admin command";
+                "thread_name" => std::thread::current().name().unwrap(),
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
                 "term" => ctx.exec_log_term,
@@ -2100,6 +2106,7 @@ where
         );
         info!(
             "exec ConfChange";
+            "thread_name" => std::thread::current().name().unwrap(),
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "type" => util::conf_change_type_str(change_type),
@@ -2155,6 +2162,7 @@ where
                     .inc();
                 info!(
                     "add peer successfully";
+                    "thread_name" => std::thread::current().name().unwrap(),
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
@@ -2208,6 +2216,7 @@ where
                     .inc();
                 info!(
                     "remove peer successfully";
+                    "thread_name" => std::thread::current().name().unwrap(),
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
@@ -2240,6 +2249,7 @@ where
                     .inc();
                 info!(
                     "add learner successfully";
+                    "thread_name" => std::thread::current().name().unwrap(),
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
@@ -2281,6 +2291,7 @@ where
 
         info!(
             "exec ConfChangeV2";
+            "thread_name" => std::thread::current().name().unwrap(),
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "kind" => ?ConfChangeKind::confchange_kind(changes.len()),
@@ -2462,6 +2473,7 @@ where
         region.mut_region_epoch().set_conf_ver(conf_ver);
         info!(
             "conf change successfully";
+            "thread_name" => std::thread::current().name().unwrap(),
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "changes" => ?changes,
@@ -2547,6 +2559,7 @@ where
 
         info!(
             "split region";
+            "thread_name" => std::thread::current().name().unwrap(),
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "region" => ?derived,
@@ -3026,6 +3039,7 @@ where
         if self.is_merging {
             info!(
                 "in merging mode, skip compact";
+                "thread_name" => std::thread::current().name().unwrap(),
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
                 "voter_replicated_index" => voter_replicated_index,
@@ -3088,6 +3102,7 @@ where
             None => {
                 info!(
                     "latest voter_replicated_index < compact_index, skip";
+                    "thread_name" => std::thread::current().name().unwrap(),
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "voter_replicated_index" => voter_replicated_index,
@@ -3109,6 +3124,7 @@ where
         if compact_index <= first_index {
             debug!(
                 "compact index <= first index, no need to compact";
+                "thread_name" => std::thread::current().name().unwrap(),
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
                 "compact_index" => compact_index,
@@ -3119,6 +3135,7 @@ where
         if self.is_merging {
             info!(
                 "in merging mode, skip compact";
+                "thread_name" => std::thread::current().name().unwrap(),
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
                 "compact_index" => compact_index
@@ -3131,6 +3148,7 @@ where
         if compact_term == 0 {
             info!(
                 "compact term missing, skip";
+                "thread_name" => std::thread::current().name().unwrap(),
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
                 "command" => ?req.get_compact_log()
@@ -3163,6 +3181,7 @@ where
                     None => {
                         info!(
                             "voter_replicated_index < compact_index, skip";
+                            "thread_name" => std::thread::current().name().unwrap(),
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
                             "command" => ?req.get_compact_log()
@@ -3267,6 +3286,7 @@ where
 
         info!(
             "exec BatchSwitchWitness";
+            "thread_name" => std::thread::current().name().unwrap(),
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "epoch" => ?self.region.get_region_epoch(),
@@ -3308,6 +3328,7 @@ where
         region.mut_region_epoch().set_conf_ver(conf_ver);
         info!(
             "switch witness successfully";
+            "thread_name" => std::thread::current().name().unwrap(),
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "switches" => ?switches,
@@ -3880,6 +3901,7 @@ where
     fn handle_registration(&mut self, reg: Registration) {
         info!(
             "re-register to apply delegates";
+            "thread_name" => std::thread::current().name().unwrap(),
             "region_id" => self.delegate.region_id(),
             "peer_id" => self.delegate.id(),
             "term" => reg.term
@@ -4015,6 +4037,7 @@ where
         );
         info!(
             "remove delegate from apply delegates";
+            "thread_name" => std::thread::current().name().unwrap(),
             "region_id" => self.delegate.region_id(),
             "peer_id" => self.delegate.id(),
         );
@@ -4090,6 +4113,7 @@ where
         let region_id = self.delegate.region_id();
         info!(
             "source logs are all applied now";
+            "thread_name" => std::thread::current().name().unwrap(),
             "region_id" => region_id,
             "peer_id" => self.delegate.id(),
         );
@@ -4155,6 +4179,7 @@ where
             error!(
                 "schedule snapshot failed";
                 "error" => ?e,
+                "thread_name" => std::thread::current().name().unwrap(),
                 "region_id" => self.delegate.region_id(),
                 "peer_id" => self.delegate.id()
             );
@@ -4270,6 +4295,14 @@ where
         match res {
             Ok((should_write, res)) => {
                 if let Some(res) = res {
+                    error!(
+                        "check_pending_compact_log"; 
+                        "applied_idx" => self.delegate.apply_state.get_applied_index(), 
+                        "last_flush_applied_index" => self.delegate.last_flush_applied_index,
+                        "thread_name" => std::thread::current().name().unwrap(),
+                        "region_id" => self.delegate.region.get_id(),
+                        "peer_id" => self.delegate.id(),
+                    );
                     ctx.prepare_for(&mut self.delegate);
                     let mut result = VecDeque::new();
                     // If modified `truncated_state` in `try_compact_log`, the apply state should be
@@ -4277,8 +4310,8 @@ where
                     if should_write {
                         self.delegate.write_apply_state(ctx.kv_wb_mut());
                         ctx.commit(&mut self.delegate);
+                        result.push_back(res);
                     }
-                    result.push_back(res);
                     if !ctx.apply_res.is_empty() {
                         if let Some(last) = ctx.apply_res.last() {
                             if last.apply_state.get_applied_index()
@@ -4288,6 +4321,7 @@ where
                                     "check_pending_compact_log not equal";
                                     "last.apply_state.get_applied_index()" => last.apply_state.get_applied_index(),
                                     "self.delegate.apply_state.get_applied_index()" => self.delegate.apply_state.get_applied_index(),
+                                    "thread_name" => std::thread::current().name().unwrap(),
                                     "region_id" => self.delegate.region_id(),
                                     "peer_id" => self.delegate.id(),
                                     "is_witness" => self.delegate.peer.is_witness,
@@ -4298,6 +4332,7 @@ where
                                         "check_pending_compact_log equal";
                                         "last.apply_state.get_applied_index()" => last.apply_state.get_applied_index(),
                                         "self.delegate.apply_state.get_applied_index()" => self.delegate.apply_state.get_applied_index(),
+                                        "thread_name" => std::thread::current().name().unwrap(),
                                         "region_id" => self.delegate.region_id(),
                                         "peer_id" => self.delegate.id(),
                                         "is_witness" => self.delegate.peer.is_witness,
@@ -4325,7 +4360,7 @@ where
                         "peer_id" => self.delegate.id(),
                         "is_witness" => self.delegate.peer.is_witness,
                         "wait_data" => self.delegate.wait_data,
-                        "apply_res's len" => ctx.apply_res.len(),
+                        "apnormal.deleagte.region_id()=1083ply_res's len" => ctx.apply_res.len(),
                     );
                 }
             }
@@ -4427,6 +4462,7 @@ where
                         voter_replicated_index,
                         voter_replicated_term,
                     );
+                    break;
                 }
             }
         }
@@ -4582,6 +4618,11 @@ where
     }
 
     fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = ApplyFsm<EK>>) -> HandleResult {
+        error!("handle_normal"; 
+               "thread_name" => std::thread::current().name().unwrap(),
+               "normal.deleagte.id()" => normal.delegate.id(),
+               "normal.deleagte.region_id()" => normal.delegate.region_id(),
+              );
         let mut handle_result = HandleResult::KeepProcessing;
         normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
