@@ -4316,6 +4316,7 @@ where
                         if let Some(last) = ctx.apply_res.last() {
                             if last.apply_state.get_applied_index()
                                 != self.delegate.apply_state.get_applied_index()
+                                && last.region_id != self.delegate.region_id()
                             {
                                 error!(
                                     "check_pending_compact_log not equal";

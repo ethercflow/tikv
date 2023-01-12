@@ -213,17 +213,24 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
                 return;
             }
         };
+        let thd_name = std::thread::current().name().unwrap().to_string();
         let mut res = match to_schedule.policy {
             Some(ReschedulePolicy::Release(l)) => {
-                error!("handle_normal"; "ReschedulePolicy::Release i" => index, "thread_name" => std::thread::current().name().unwrap());
+                if thd_name.as_str().contains("apply-") {
+                    error!("handle_normal"; "ReschedulePolicy::Release i" => index, "thread_name" => std::thread::current().name().unwrap());
+                }
                 self.release(to_schedule, l)
             }
             Some(ReschedulePolicy::Remove) => {
-                error!("handle_normal"; "ReschedulePolicy::Remove i" => index, "thread_name" => std::thread::current().name().unwrap());
+                if thd_name.as_str().contains("apply-") {
+                    error!("handle_normal"; "ReschedulePolicy::Remove i" => index, "thread_name" => std::thread::current().name().unwrap());
+                }
                 self.remove(to_schedule)
             }
             Some(ReschedulePolicy::Schedule) => {
-                error!("handle_normal"; "ReschedulePolicy::schedule i" => index, "thread_name" => std::thread::current().name().unwrap());
+                if thd_name.as_str().contains("apply-") {
+                    error!("handle_normal"; "ReschedulePolicy::schedule i" => index, "thread_name" => std::thread::current().name().unwrap());
+                }
                 router.normal_scheduler.schedule(to_schedule.fsm);
                 None
             }
@@ -232,7 +239,9 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         if let Some(f) = &mut res {
             // failed to reschedule
             f.policy.take();
-            error!("handle_normal"; "failed to schedule i" => index, "thread_name" => std::thread::current().name().unwrap());
+            if thd_name.as_str().contains("apply-") {
+                error!("handle_normal"; "failed to schedule i" => index, "thread_name" => std::thread::current().name().unwrap());
+            }
             self.normals[index] = res;
         }
     }
@@ -401,6 +410,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         let mut reschedule_fsms = Vec::with_capacity(self.max_batch_size);
         let mut to_skip_end = Vec::with_capacity(self.max_batch_size);
 
+        let thd_name = std::thread::current().name().unwrap().to_string();
+
         // Fetch batch after every round is finished. It's helpful to protect regions
         // from becoming hungry if some regions are hot points. Since we fetch new FSM
         // every time calling `poll`, we do not need to configure a large value for
@@ -478,7 +489,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     break;
                 }
                 let p = batch.normals[fsm_cnt].as_mut().unwrap();
-                error!("handle_normal"; "fsm_cnt" => fsm_cnt, "thread_name" => std::thread::current().name().unwrap());
+                if thd_name.as_str().contains("apply-") {
+                    error!("handle_normal"; "fsm_cnt" => fsm_cnt, "thread_name" => thd_name.as_str());
+                }
                 let res = self.handler.handle_normal(p);
                 if p.is_stopped() {
                     p.policy = Some(ReschedulePolicy::Remove);
@@ -494,7 +507,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             }
             self.handler.light_end(&mut batch.normals);
             for index in &to_skip_end {
-                error!("light_end schedule"; "index" => index, "thread_name" => std::thread::current().name().unwrap());
+                if thd_name.as_str().contains("apply-") {
+                    error!("light_end schedule"; "index" => index, "thread_name" => thd_name.as_str());
+                }
                 batch.schedule(&self.router, *index);
             }
             to_skip_end.clear();
@@ -503,7 +518,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             // Iterate larger index first, so that `swap_reclaim` won't affect other FSMs
             // in the list.
             for index in reschedule_fsms.iter().rev() {
-                error!("end schedule"; "index" => index, "thread_name" => std::thread::current().name().unwrap());
+                if thd_name.as_str().contains("apply-") {
+                    error!("end schedule"; "index" => index, "thread_name" => thd_name.as_str());
+                }
                 batch.schedule(&self.router, *index);
                 batch.swap_reclaim(*index);
             }
