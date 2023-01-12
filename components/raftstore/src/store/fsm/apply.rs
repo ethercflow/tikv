@@ -721,6 +721,8 @@ where
             );
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
+        } else {
+            error!("end flush emmpty"; "apply_res's len" => self.apply_res.len());
         }
 
         let elapsed = t.saturating_elapsed();
