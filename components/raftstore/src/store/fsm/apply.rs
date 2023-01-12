@@ -715,10 +715,10 @@ where
 
         if !self.apply_res.is_empty() {
             fail_point!("before_nofity_apply_res");
-            error!("end flush"; 
-                   "apply_res's len" => self.apply_res.len(),
-                   "thread_name" => std::thread::current().name().unwrap(),
-                   );
+            error!("end flush";
+            "apply_res's len" => self.apply_res.len(),
+            "thread_name" => std::thread::current().name().unwrap(),
+            );
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
@@ -4296,8 +4296,8 @@ where
             Ok((should_write, res)) => {
                 if let Some(res) = res {
                     error!(
-                        "check_pending_compact_log"; 
-                        "applied_idx" => self.delegate.apply_state.get_applied_index(), 
+                        "check_pending_compact_log";
+                        "applied_idx" => self.delegate.apply_state.get_applied_index(),
                         "last_flush_applied_index" => self.delegate.last_flush_applied_index,
                         "thread_name" => std::thread::current().name().unwrap(),
                         "region_id" => self.delegate.region.get_id(),
@@ -4360,7 +4360,7 @@ where
                         "peer_id" => self.delegate.id(),
                         "is_witness" => self.delegate.peer.is_witness,
                         "wait_data" => self.delegate.wait_data,
-                        "apnormal.deleagte.region_id()=1083ply_res's len" => ctx.apply_res.len(),
+                        "apply_res's len" => ctx.apply_res.len(),
                     );
                 }
             }
@@ -4618,11 +4618,11 @@ where
     }
 
     fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = ApplyFsm<EK>>) -> HandleResult {
-        error!("handle_normal"; 
-               "thread_name" => std::thread::current().name().unwrap(),
-               "normal.deleagte.id()" => normal.delegate.id(),
-               "normal.deleagte.region_id()" => normal.delegate.region_id(),
-              );
+        error!("handle_normal";
+         "thread_name" => std::thread::current().name().unwrap(),
+         "normal.deleagte.id()" => normal.delegate.id(),
+         "normal.deleagte.region_id()" => normal.delegate.region_id(),
+        );
         let mut handle_result = HandleResult::KeepProcessing;
         normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
@@ -4682,6 +4682,10 @@ where
     }
 
     fn end(&mut self, fsms: &mut [Option<impl DerefMut<Target = ApplyFsm<EK>>>]) {
+        error!("end before call flush";
+            "apply_res's len" => self.apply_ctx.apply_res.len(),
+            "thread_name" => std::thread::current().name().unwrap(),
+        );
         self.apply_ctx.flush();
         for fsm in fsms.iter_mut().flatten() {
             fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
