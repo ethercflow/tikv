@@ -701,23 +701,43 @@ where
     /// If it returns true, all pending writes are persisted in engines.
     pub fn flush(&mut self) -> bool {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
+        error!("end flush before get timer";
+            "apply_res's len" => self.apply_res.len(),
+            "thread_name" => std::thread::current().name().unwrap(),
+        );
         let t = match self.timer.take() {
             Some(t) => t,
             None => return false,
         };
+        error!("end flush after get timer";
+            "apply_res's len" => self.apply_res.len(),
+            "thread_name" => std::thread::current().name().unwrap(),
+        );
 
         // Write to engine
         // raftstore.sync-log = true means we need prevent data loss when power failure.
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        let (is_synced, _) = self.write_to_db();
-
-        if !self.apply_res.is_empty() {
-            fail_point!("before_nofity_apply_res");
-            error!("end flush";
+        error!("end flush before write_to_db";
             "apply_res's len" => self.apply_res.len(),
             "thread_name" => std::thread::current().name().unwrap(),
+        );
+        let (is_synced, _) = self.write_to_db();
+        error!("end flush after write_to_db";
+            "apply_res's len" => self.apply_res.len(),
+            "thread_name" => std::thread::current().name().unwrap(),
+        );
+
+        if !self.apply_res.is_empty() {
+            error!("end flush before fail_point";
+                "apply_res's len" => self.apply_res.len(),
+                "thread_name" => std::thread::current().name().unwrap(),
+            );
+            fail_point!("before_nofity_apply_res");
+            error!("end flush after fail_point";
+                "apply_res's len" => self.apply_res.len(),
+                "thread_name" => std::thread::current().name().unwrap(),
             );
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
