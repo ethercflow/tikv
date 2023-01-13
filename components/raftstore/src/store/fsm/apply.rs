@@ -701,14 +701,14 @@ where
     /// If it returns true, all pending writes are persisted in engines.
     pub fn flush(&mut self) -> bool {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
-        error!("end flush before get timer";
-            "apply_res's len" => self.apply_res.len(),
-            "thread_name" => std::thread::current().name().unwrap(),
-        );
         let t = match self.timer.take() {
             Some(t) => t,
             None => return false,
         };
+        error!("end flush before get timer";
+            "apply_res's len" => self.apply_res.len(),
+            "thread_name" => std::thread::current().name().unwrap(),
+        );
         error!("end flush after get timer";
             "apply_res's len" => self.apply_res.len(),
             "thread_name" => std::thread::current().name().unwrap(),
@@ -4303,6 +4303,10 @@ where
         voter_replicated_index: u64,
         voter_replicated_term: u64,
     ) {
+        if ctx.timer.is_none() {
+            ctx.timer = Some(Instant::now_coarse());
+        }
+
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
@@ -4332,8 +4336,8 @@ where
                     if should_write {
                         self.delegate.write_apply_state(ctx.kv_wb_mut());
                         ctx.commit(&mut self.delegate);
-                        result.push_back(res);
                     }
+                    result.push_back(res);
                     if !ctx.apply_res.is_empty() {
                         if let Some(last) = ctx.apply_res.last() {
                             if last.apply_state.get_applied_index()
