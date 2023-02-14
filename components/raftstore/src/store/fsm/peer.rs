@@ -5570,6 +5570,10 @@ where
         if !self.fsm.peer.wait_data || self.fsm.peer.is_leader() {
             return;
         }
+        if self.fsm.peer.is_handling_snapshot() || self.fsm.peer.has_pending_snapshot() {
+            self.schedule_tick(PeerTick::RequestSnapshot);
+            return;
+        }
         self.fsm.peer.request_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
         let last_term = self.fsm.peer.get_index_term(self.fsm.peer.request_index);
         if last_term == self.fsm.peer.term() {
