@@ -2120,6 +2120,14 @@ where
             // `RAFT_INIT_LOG_INDEX`(5).
             if progress.matched < truncated_idx {
                 if let Some(p) = self.get_peer_from_cache(id) {
+                    error!(
+                        "collect_pending_peers";
+                        "region_id" => self.region_id,
+                        "peer_id" => p.get_id(),
+                        "progress.matched" => progress.matched,
+                        "truncated_idx" => truncated_idx,
+                        "leader_id" => self.peer.get_id(),
+                    );
                     pending_peers.push(p);
                     if !self
                         .peers_start_pending_time
