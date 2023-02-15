@@ -3844,6 +3844,16 @@ where
 
         for (id, pr) in progress.iter() {
             if pr.state == ProgressState::Snapshot {
+                error!("in ready_to_transfer_leader";
+                    "id" => id,
+                    "matched" => pr.matched,
+                    "next_idx" => pr.next_idx,
+                    "paused" => pr.paused,
+                    "pending_snapshot" => pr.pending_snapshot,
+                    "pending_request_snapshot" => pr.pending_request_snapshot,
+                    "recent_active" => pr.recent_active,
+                    "committed_index" => pr.committed_index,
+                );
                 return Some("pending snapshot");
             }
             if *id == peer_id && index == 0 {
