@@ -443,18 +443,10 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 sending_count.fetch_add(1, Ordering::SeqCst);
                 info!(
                     "before send snapshot";
-                    "region_id" => stat.key.region_id,
-                    "snap_key" => %stat.key,
-                    "size" => stat.total_size,
-                    "duration" => ?stat.elapsed
                 );
                 let send_task = send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg);
                 info!(
                     "after call send snapshot";
-                    "region_id" => stat.key.region_id,
-                    "snap_key" => %stat.key,
-                    "size" => stat.total_size,
-                    "duration" => ?stat.elapsed
                 );
                 let task = async move {
                     let res = match send_task {
