@@ -456,6 +456,11 @@ where
         });
         if self.peer.as_ref().unwrap().is_witness {
             // witness could be the leader for a while, do not generate snapshot now
+            error!("get a snapshot return SnapshotTemporarilyUnavailable";
+                    "region_id" => self.region.get_id(),
+                    "request_index" => request_index,
+                    "to" => to,
+                    );
             return Err(raft::Error::Store(
                 raft::StorageError::SnapshotTemporarilyUnavailable,
             ));
@@ -468,6 +473,11 @@ where
             // will ingore this mismatch snapshot and can't request snapshot successfully
             // again.
             if self.applied_index() < request_index {
+                error!("get a snapshot return SnapshotTemporarilyUnavailable as it maybe from non-witness";
+                        "region_id" => self.region.get_id(),
+                        "request_index" => request_index,
+                        "to" => to,
+                        );
                 // It may be a request from non-witness. In order to avoid generating mismatch
                 // snapshots, wait for apply non-witness to complete
                 return Err(raft::Error::Store(
