@@ -5607,6 +5607,11 @@ where
                     "err" => %e,
                 );
             }
+            info!(
+                "non-witness request snaphost";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
         } else {
             // If a leader change occurs after switch to non-witness, it should be
             // continue processing `MsgAppend` until `last_term == term`, then retry

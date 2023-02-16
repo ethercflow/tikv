@@ -33,7 +33,7 @@ use raft_proto::ConfChangeI;
 use tikv_util::{
     box_err,
     codec::number::{decode_u64, NumberEncoder},
-    debug, info,
+    debug, info, error,
     store::{find_peer_by_id, region},
     time::monotonic_raw_now,
     Either,
@@ -140,6 +140,12 @@ pub fn new_empty_snapshot(
     applied_term: u64,
     for_witness: bool,
 ) -> Snapshot {
+    error!("new_empty_snapshot";
+           "region_id" => region.get_id(),
+           "applied_index" => applied_index,
+           "applied_term" => applied_term,
+           "for_witness" => for_witness,
+            );
     let mut snapshot = Snapshot::default();
     snapshot.mut_metadata().set_index(applied_index);
     snapshot.mut_metadata().set_term(applied_term);

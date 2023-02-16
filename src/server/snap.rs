@@ -441,7 +441,21 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 let security_mgr = Arc::clone(&self.security_mgr);
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
+                info!(
+                    "before send snapshot";
+                    "region_id" => stat.key.region_id,
+                    "snap_key" => %stat.key,
+                    "size" => stat.total_size,
+                    "duration" => ?stat.elapsed
+                );
                 let send_task = send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg);
+                info!(
+                    "after call send snapshot";
+                    "region_id" => stat.key.region_id,
+                    "snap_key" => %stat.key,
+                    "size" => stat.total_size,
+                    "duration" => ?stat.elapsed
+                );
                 let task = async move {
                     let res = match send_task {
                         Err(e) => Err(e),
