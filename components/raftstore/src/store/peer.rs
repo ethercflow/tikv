@@ -4542,6 +4542,15 @@ where
         msg: &eraftpb::Message,
     ) -> bool {
         if !ctx.cfg.warmup_entry_cache_enabled() {
+            error!(
+                "pre_ack_transfer_leader_msg disable warmup";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "from" => msg.get_from(),
+                "disk_usage" => ?ctx.self_disk_usage,
+                "is_witness" => self.is_witness(),
+                "wait_data" => self.wait_data,
+            );
             return true;
         }
 
@@ -4560,6 +4569,15 @@ where
             // is larger than the last index. Check the test case
             // `test_when_warmup_range_start_is_larger_than_last_index`
             // for details.
+            error!(
+                "pre_ack_transfer_leader_msg need not to warmup";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "from" => msg.get_from(),
+                "disk_usage" => ?ctx.self_disk_usage,
+                "is_witness" => self.is_witness(),
+                "wait_data" => self.wait_data,
+            );
             should_ack_now = true;
         } else {
             if low < self.last_compacted_idx {
@@ -4569,6 +4587,15 @@ where
             if let Some(first_index) = self.get_store().entry_cache_first_index() {
                 if low >= first_index {
                     fail_point!("entry_cache_already_warmed_up");
+                    error!(
+                        "pre_ack_transfer_leader_msg already warmup";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "from" => msg.get_from(),
+                        "disk_usage" => ?ctx.self_disk_usage,
+                        "is_witness" => self.is_witness(),
+                        "wait_data" => self.wait_data,
+                    );
                     should_ack_now = true;
                 }
             }
@@ -4578,6 +4605,15 @@ where
             return true;
         }
 
+        error!(
+            "pre_ack_transfer_leader_msg async warmup";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+            "from" => msg.get_from(),
+            "disk_usage" => ?ctx.self_disk_usage,
+            "is_witness" => self.is_witness(),
+            "wait_data" => self.wait_data,
+        );
         // Check if the warmup operation is timeout if warmup is already started.
         if let Some(state) = self.mut_store().entry_cache_warmup_state_mut() {
             // If it is timeout, this peer should ack the message so that
@@ -4601,6 +4637,14 @@ where
         if reply_cmd {
             msg.set_context(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX));
         }
+        error!(
+            "ack transfer leader msg";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+            "from" => msg.get_from(),
+            "is_witness" => self.is_witness(),
+            "wait_data" => self.wait_data,
+        );
         self.raft_group.raft.msgs.push(msg);
     }
 
@@ -4669,8 +4713,18 @@ where
         };
 
         let transferred = if peer.id == self.peer.id {
+            error!("propose_transfer_leader false";
+                "peer.id" => peer.id,
+                "self.peer.id" => self.peer.id,
+                "region_id" => self.region_id,
+            );
             false
         } else {
+            error!("propose_transfer_leader will call pre_transfer_leader";
+                "peer.id" => peer.id,
+                "self.peer.id" => self.peer.id,
+                "region_id" => self.region_id,
+            );
             self.pre_transfer_leader(peer)
         };
 
