@@ -2539,6 +2539,10 @@ where
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
         let result = if msg_type == MessageType::MsgTransferLeader {
+            error!("on_raft_message, recv MsgTrasnferLeader";
+                "self.peer.id" => self.fsm.peer.id,
+                "region_id" => self.fsm.region_id(),
+                );
             self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
             Ok(())
         } else {
@@ -3327,6 +3331,11 @@ where
         // log_term is set by original leader, represents the term last log is written
         // in, which should be equal to the original leader's term.
         if msg.get_log_term() != self.fsm.peer.term() {
+            error!("reject to transfer leader, term not match";
+                   "region_id" => self.fsm.region_id(),
+                   "peer_id" => self.fsm.peer_id(),
+                   "to" => ?from,
+            );
             return;
         }
         if self.fsm.peer.is_leader() {
@@ -5161,6 +5170,8 @@ where
             && !(msg.has_admin_request()
                 && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)
         {
+            error!("pre_propose_raft_command forbid reqs when it's a witness";
+                    "cmd_type" => msg.get_admin_request().get_cmd_type());
             self.ctx.raft_metrics.invalid_proposal.witness.inc();
             return Err(Error::IsWitness(self.region_id()));
         }
@@ -5176,6 +5187,8 @@ where
                 .iter()
                 .any(|s| s.get_peer_id() == self.fsm.peer.peer.get_id() && s.get_is_witness())
         {
+            error!("pre_propose_raft_command forbid sw when it's a witness leader";
+                    "cmd_type" => msg.get_admin_request().get_cmd_type());
             self.ctx.raft_metrics.invalid_proposal.witness.inc();
             return Err(Error::IsWitness(self.region_id()));
         }
@@ -5308,7 +5321,7 @@ where
                 return;
             }
             Err(e) => {
-                debug!(
+                error!(
                     "failed to propose";
                     "region_id" => self.region_id(),
                     "peer_id" => self.fsm.peer_id(),
@@ -5322,7 +5335,7 @@ where
         }
 
         if let Err(e) = self.check_merge_proposal(&mut msg) {
-            warn!(
+            error!(
                 "failed to propose merge";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
@@ -5474,6 +5487,14 @@ where
                 last_idx,
                 replicated_idx
             );
+            if (last_idx - replicated_idx) as i64 > 10000 {
+                error!() {
+                    "raft log lag too many",
+                    "peer_id" => self.fsm.peer.id,
+                    "region_id" => self.fsm.region_id(),
+                }
+            }
+
             REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
         }
 

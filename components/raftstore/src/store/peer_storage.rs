@@ -484,6 +484,12 @@ where
                     raft::StorageError::SnapshotTemporarilyUnavailable,
                 ));
             }
+            error!("new empty snapshot";
+                    "region_id" => self.region.get_id(),
+                    "request_index" => request_index,
+                    "to" => to,
+                    );
+
             // generate an empty snapshot for witness directly
             return Ok(util::new_empty_snapshot(
                 self.region.clone(),
