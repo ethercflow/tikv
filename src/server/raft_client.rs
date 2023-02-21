@@ -426,8 +426,14 @@ where
         }
     }
 
+    // fn send_snapshot_sock(&self, msg: RaftMessage, for_witness: bool) {
     fn send_snapshot_sock(&self, msg: RaftMessage) {
         let rep = self.new_snapshot_reporter(&msg);
+        //if for_witness {
+        //    rep.report(SnapshotStatus::Finish);
+        //    return
+        //}
+
         let cb = Box::new(move |res: Result<_, _>| {
             if res.is_err() {
                 rep.report(SnapshotStatus::Failure);
@@ -462,10 +468,15 @@ where
                     .merge_from_bytes(msg.get_message().get_snapshot().get_data())
                     .unwrap();
                 // Witness's snapshot must be empty, no need to send snapshot files
-                if !snapshot.get_meta().get_for_witness() {
+                 if !snapshot.get_meta().get_for_witness() {
                     self.send_snapshot_sock(msg);
+                    // self.send_snapshot_sock(msg, snapshot.get_meta().get_for_witness());
                     continue;
-                }
+                 } else {
+                    error!("witness's snapshot must be empty");
+                    let rep = self.new_snapshot_reporter(&msg);
+                    rep.report(SnapshotStatus::Finish);
+                 }
             }
             self.buffer.push(msg);
         }
