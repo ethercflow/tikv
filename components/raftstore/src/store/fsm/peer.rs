@@ -5201,8 +5201,11 @@ where
         }
 
         // Forbid requests when it becomes to non-witness but not finish applying
-        // snapshot.
-        if self.fsm.peer.wait_data {
+        // snapshot unless it's transfer leader.
+        if self.fsm.peer.wait_data
+            && !(msg.has_admin_request()
+                && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)
+        {
             self.ctx.raft_metrics.invalid_proposal.non_witness.inc();
             return Err(Error::IsWitness(self.region_id()));
         }
