@@ -6503,7 +6503,7 @@ where
         for s in sw.switches {
             let (peer_id, is_witness) = (s.get_peer_id(), s.get_is_witness());
             if self.fsm.peer_id() == peer_id {
-                if is_witness && !self.fsm.peer.is_leader() {
+                if is_witness {
                     let _ = self.fsm.peer.get_store().clear_data();
                     self.fsm.peer.raft_group.set_priority(-1);
                 } else {
