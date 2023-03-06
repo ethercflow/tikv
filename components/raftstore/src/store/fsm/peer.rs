@@ -3931,6 +3931,7 @@ where
     }
 
     fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
+        error!("on_ready_compact_log"; "peer_id" => self.fsm.peer_id());
         // Since this peer may be warming up the entry cache, log compaction should be
         // temporarily skipped. Otherwise, the warmup task may fail.
         if let Some(state) = self.fsm.peer.mut_store().entry_cache_warmup_state_mut() {

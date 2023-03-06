@@ -1092,6 +1092,13 @@ where
         )?;
         let applied_index = ps.applied_index();
 
+        let max_committed_size_per_ready = (|| {
+            fail_point!("before_init_raft_cfg", peer_id == 2, |_| 1 as u64);
+            MAX_COMMITTED_SIZE_PER_READY
+        })();
+
+        error!("before_init_raft_cfg"; "peer_id" => peer_id, "max_committed_size_per_ready" => max_committed_size_per_ready);
+
         let raft_cfg = raft::Config {
             id: peer.get_id(),
             election_tick: cfg.raft_election_timeout_ticks,
@@ -1104,7 +1111,7 @@ where
             check_quorum: true,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
-            max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
+            max_committed_size_per_ready,
             priority: if peer.is_witness { -1 } else { 0 },
             ..Default::default()
         };
@@ -3002,6 +3009,9 @@ where
             "{} is applying snapshot when it is ready to handle committed entries",
             self.tag
         );
+
+        error!("handle_raft_committed_entries"; "peer_id" => self.peer.id, "committed_entries's len" => committed_entries.len());
+
         // Leader needs to update lease.
         let mut lease_to_be_updated = self.is_leader();
         for entry in committed_entries.iter().rev() {

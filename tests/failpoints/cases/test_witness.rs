@@ -1,13 +1,23 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{iter::FromIterator, sync::Arc, time::Duration};
+use std::{
+    iter::FromIterator,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use collections::HashMap;
+use fail::fail_point;
 use futures::executor::block_on;
 use kvproto::{metapb, raft_serverpb::RaftApplyState};
 use pd_client::PdClient;
+use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, store::find_peer};
+use tikv_util::{
+    config::ReadableDuration,
+    store::{find_peer, new_witness_peer},
+    HandyRwLock,
+};
 
 // Test the case local reader works well with witness peer.
 #[test]
@@ -517,10 +527,9 @@ fn test_witness_leader_transfer_out() {
     let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
 
-    fail::cfg("ignore request snapshot", "pause").unwrap();
-
     // prevent this peer from applying the switch witness command until it's elected
     // as the Raft leader
+    fail::cfg("before_exec_batch_switch_witness", "pause").unwrap();
     let peer_on_store2 = find_peer(&region, nodes[1]).unwrap().clone();
     // nonwitness -> witness
     cluster
@@ -537,12 +546,12 @@ fn test_witness_leader_transfer_out() {
     // the leader is down
     cluster.stop_node(1);
 
-    fail::remove("ignore request snapshot");
-    // make sure the leader has became to the witness
-    std::thread::sleep(Duration::from_millis(500));
-
-    // witness would help to replicate the logs
+    // new leader would help to replicate the logs
     cluster.clear_send_filters();
+    std::thread::sleep(Duration::from_millis(1000));
+    // make sure the new leader has became to the witness
+    fail::remove("before_exec_batch_switch_witness");
+    std::thread::sleep(Duration::from_millis(500));
 
     // forbid writes
     let put = new_put_cmd(b"k3", b"v3");
@@ -555,6 +564,106 @@ fn test_witness_leader_transfer_out() {
     must_get_error_is_witness(&mut cluster, &region, read_index);
 
     let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+
+    cluster.must_transfer_leader(region.get_id(), peer_on_store3);
+    cluster.must_put(b"k1", b"v1");
+    assert_eq!(
+        cluster.leader_of_region(region.get_id()).unwrap().store_id,
+        nodes[2],
+    );
+    assert_eq!(cluster.must_get(b"k9"), Some(b"v9".to_vec()));
+}
+
+#[test]
+fn test_witness_apply_snapshot_with_network_isolation() {
+    fail::cfg("before_init_raft_cfg", "return").unwrap();
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
+    configure_for_snapshot(&mut cluster.cfg);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_put(b"k0", b"v0");
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+
+    // the other follower is isolated
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    // make sure raft log gc is triggered
+    std::thread::sleep(Duration::from_millis(200));
+    let mut before_states = HashMap::default();
+    for (&id, engines) in &cluster.engines {
+        let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
+        before_states.insert(id, state.take_truncated_state());
+    }
+
+    // write some data to make log gap exceeds the gc limit
+    for i in 1..1000 {
+        let (k, v) = (format!("k{}", i), format!("v{}", i));
+        let key = k.as_bytes();
+        let value = v.as_bytes();
+        cluster.must_put(key, value);
+    }
+
+    std::thread::sleep(Duration::from_millis(200));
+
+    // the truncated index is advanced
+    for (&id, engines) in &cluster.engines {
+        let state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
+        let diff = state.get_truncated_state().get_index() - before_states[&id].get_index();
+        error!("EEEEE";
+            "id" => &id,
+            "diff" => diff,
+            "state.get_truncated_state().get_index()" => state.get_truncated_state().get_index(),
+            "before_states[&id].get_index()" => before_states[&id].get_index()
+        );
+        assert_ne!(
+            900,
+            state.get_truncated_state().get_index() - before_states[&id].get_index()
+        );
+    }
+
+    // prevent this peer from applying the switch witness command until it's elected
+    // as the Raft leader
+    fail::cfg("before_exec_batch_switch_witness", "pause").unwrap();
+    let peer_on_store2 = find_peer(&region, nodes[1]).unwrap().clone();
+    // nonwitness -> witness
+    cluster
+        .pd_client
+        .switch_witnesses(region.get_id(), vec![peer_on_store2.get_id()], vec![true]);
+    // make sure the left peers have applied switch witness cmd
+    std::thread::sleep(Duration::from_millis(500));
+
+    // the leader is down
+    cluster.stop_node(1);
+
+    // new leader would help to replicate the logs
+    cluster.clear_send_filters();
+    std::thread::sleep(Duration::from_millis(1000));
+    // make sure the new leader has became to the witness
+    fail::remove("before_exec_batch_switch_witness");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // forbid writes
+    let put = new_put_cmd(b"k3", b"v3");
+    must_get_error_is_witness(&mut cluster, &region, put);
+    // forbid reads
+    let get = new_get_cmd(b"k1");
+    must_get_error_is_witness(&mut cluster, &region, get);
+    // forbid read index
+    let read_index = new_read_index_cmd();
+    must_get_error_is_witness(&mut cluster, &region, read_index);
+
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+
     cluster.must_transfer_leader(region.get_id(), peer_on_store3);
     cluster.must_put(b"k1", b"v1");
     assert_eq!(
