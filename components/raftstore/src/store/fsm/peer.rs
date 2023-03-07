@@ -3931,6 +3931,7 @@ where
     }
 
     fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
+        error!("on_ready_compact_log"; "peer_id" => self.fsm.peer_id());
         // Since this peer may be warming up the entry cache, log compaction should be
         // temporarily skipped. Otherwise, the warmup task may fail.
         if let Some(state) = self.fsm.peer.mut_store().entry_cache_warmup_state_mut() {
@@ -5155,6 +5156,8 @@ where
             self.ctx.raft_metrics.invalid_proposal.witness.inc();
             return Err(Error::IsWitness(self.region_id()));
         }
+
+        fail_point!("ignore_forbid_leader_to_be_witness", |_| Ok(None));
 
         // Forbid requests to switch it into a witness when it's a leader
         if self.fsm.peer.is_leader()
@@ -6471,11 +6474,11 @@ where
             if self.fsm.peer_id() == peer_id {
                 if is_witness {
                     self.fsm.peer.raft_group.set_priority(-1);
-                    if !self.fsm.peer.is_leader() {
+                    //if !self.fsm.peer.is_leader() {
                         let _ = self.fsm.peer.get_store().clear_data();
-                    } else {
-                        self.fsm.peer.delay_clean_data = true;
-                    }
+                    // } else {
+                    //     self.fsm.peer.delay_clean_data = true;
+                    // }
                 } else {
                     self.fsm
                         .peer

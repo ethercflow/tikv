@@ -2559,6 +2559,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .can_enable(MULTI_FILES_SNAPSHOT_FEATURE),
         );
 
+        fail_point!("ignore_gc_snapshot", |_| {});
         if let Err(e) = self
             .ctx
             .cleanup_scheduler

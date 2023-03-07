@@ -449,17 +449,19 @@ where
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// available snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
+        error!("begin at snapshot");
         fail_point!("ignore generate snapshot", self.peer_id == 1, |_| {
             Err(raft::Error::Store(
                 raft::StorageError::SnapshotTemporarilyUnavailable,
             ))
         });
-        if self.peer.as_ref().unwrap().is_witness {
-            // witness could be the leader for a while, do not generate snapshot now
-            return Err(raft::Error::Store(
-                raft::StorageError::SnapshotTemporarilyUnavailable,
-            ));
-        }
+        // if self.peer.as_ref().unwrap().is_witness {
+        // error!("SnapshotTemporarilyUnavailable as witness");
+        // witness could be the leader for a while, do not generate snapshot now
+        // return Err(raft::Error::Store(
+        // raft::StorageError::SnapshotTemporarilyUnavailable,
+        // ));
+        // }
 
         if find_peer_by_id(&self.region, to).map_or(false, |p| p.is_witness) {
             // Although we always sending snapshot task behind apply task to get latest
@@ -468,6 +470,7 @@ where
             // will ingore this mismatch snapshot and can't request snapshot successfully
             // again.
             if self.applied_index() < request_index {
+                error!("SnapshotTemporarilyUnavailable as witness mismatch");
                 // It may be a request from non-witness. In order to avoid generating mismatch
                 // snapshots, wait for apply non-witness to complete
                 return Err(raft::Error::Store(
@@ -494,8 +497,10 @@ where
         {
             tried = true;
             last_canceled = canceled.load(Ordering::SeqCst);
+            fail_point!("delay_to_receive_snapshot");
             match receiver.try_recv() {
                 Err(TryRecvError::Empty) => {
+                    error!("SnapshotTemporarilyUnavailable receive none");
                     return Err(raft::Error::Store(
                         raft::StorageError::SnapshotTemporarilyUnavailable,
                     ));
@@ -524,7 +529,12 @@ where
             panic!("{} unexpected state: {:?}", self.tag, *snap_state);
         }
 
-        if *tried_cnt >= MAX_SNAP_TRY_CNT {
+        let max_snap_try_cnt = (|| {
+            fail_point!("ignore_snap_try_cnt", |_| usize::MAX);
+            MAX_SNAP_TRY_CNT
+        })();
+
+        if *tried_cnt >= max_snap_try_cnt {
             let cnt = *tried_cnt;
             *tried_cnt = 0;
             return Err(raft::Error::Store(box_err!(
@@ -565,6 +575,7 @@ where
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
         *gen_snap_task = Some(task);
+        error!("after gen_snap_task return");
         Err(raft::Error::Store(
             raft::StorageError::SnapshotTemporarilyUnavailable,
         ))
@@ -839,6 +850,7 @@ where
 
     /// Cancel generating snapshot.
     pub fn cancel_generating_snap(&mut self, compact_to: Option<u64>) {
+        error!("cancel_generating_snap");
         let snap_state = self.snap_state.borrow();
         if let SnapState::Generating {
             ref canceled,

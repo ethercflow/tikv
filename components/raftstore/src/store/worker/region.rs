@@ -301,13 +301,16 @@ where
         for_balance: bool,
         allow_multi_files_snapshot: bool,
     ) {
+        error!("before_region_gen_snap");
         fail_point!("before_region_gen_snap", |_| ());
         SNAP_COUNTER.generate.start.inc();
         if canceled.load(Ordering::Relaxed) {
+            error!("canceled???");
             info!("generate snap is canceled"; "region_id" => region_id);
             SNAP_COUNTER.generate.abort.inc();
             return;
         }
+        error!("after_region_gen_snap");
 
         let start = Instant::now();
         let _io_type_guard = WithIoType::new(if for_balance {
@@ -856,6 +859,7 @@ where
                 start_key,
                 end_key,
             } => {
+                error!("on_region_worker_destroy");
                 fail_point!("on_region_worker_destroy", true, |_| {});
                 // try to delay the range deletion because
                 // there might be a coprocessor request related to this range
